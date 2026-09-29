@@ -16,6 +16,7 @@ import (
 	"docproject/backend/internal/auth"
 	"docproject/backend/internal/config"
 	"docproject/backend/internal/groups"
+	"docproject/backend/internal/subgroupassignments"
 	"docproject/backend/internal/subgroups"
 	"docproject/backend/internal/users"
 )
@@ -116,6 +117,32 @@ func run() error {
 	mux.Handle(
 		"GET /groups/{group_id}/subgroups",
 		protectedSubgroupsHandler,
+	)
+
+	// Subgroup faculty assignment routes
+	subgroupAssignmentsService := subgroupassignments.NewService(database)
+	subgroupAssignmentsHandler := subgroupassignments.NewHandler(
+		subgroupAssignmentsService,
+	)
+
+	protectedSubgroupAssignmentsHandler := auth.AuthMiddleware(
+		tokenService,
+		subgroupAssignmentsHandler,
+	)
+
+	mux.Handle(
+		"POST /groups/{group_id}/subgroups/{subgroup_id}/faculty",
+		protectedSubgroupAssignmentsHandler,
+	)
+
+	mux.Handle(
+		"GET /groups/{group_id}/subgroups/{subgroup_id}/faculty",
+		protectedSubgroupAssignmentsHandler,
+	)
+
+	mux.Handle(
+		"DELETE /groups/{group_id}/subgroups/{subgroup_id}/faculty/{faculty_id}",
+		protectedSubgroupAssignmentsHandler,
 	)
 
 	// Health routes
