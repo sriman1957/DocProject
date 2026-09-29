@@ -99,6 +99,18 @@ func TestServiceListIntegration(t *testing.T) {
 		t.Fatalf("create active group: %v", err)
 	}
 
+	// A newly created group should return an empty member list.
+	emptyMembers, err := service.ListMembers(ctx, collegeA, created.ID)
+	if err != nil {
+		t.Fatalf("list members of empty group: %v", err)
+	}
+	if len(emptyMembers) != 0 {
+		t.Fatalf(
+			"expected 0 members in empty group, got %d",
+			len(emptyMembers),
+		)
+	}
+
 	// Create an inactive group directly.
 	_, err = tx.Exec(ctx, `
 		INSERT INTO groups (
@@ -135,7 +147,89 @@ func TestServiceListIntegration(t *testing.T) {
 		t.Errorf("college B: expected 0 groups, got %d", len(groupsB))
 	}
 
-	// Invalid tenant IDs should be rejected.
+	// Create a student in college A.
+	var studentID int64
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO users (
+			college_id,
+			full_name,
+			email,
+			password_hash,
+			role
+		)
+		VALUES ($1, $2, $3, $4, 'student')
+		RETURNING id
+	`,
+		collegeA,
+		"Integration Student",
+		fmt.Sprintf(
+			"student-%s@integration.docproject.local",
+			uniqueCode("user"),
+		),
+		"integration-test-hash",
+	).Scan(&studentID)
+	if err != nil {
+		t.Fatalf("create integration student: %v", err)
+	}
+
+	// Add the student to the group.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO group_memberships (
+			college_id,
+			group_id,
+			user_id,
+			membership_role
+		)
+		VALUES ($1, $2, $3, 'student')
+	`, collegeA, created.ID, studentID)
+	if err != nil {
+		t.Fatalf("add student to group: %v", err)
+	}
+
+	// Listing members should return the student.
+	members, err := service.ListMembers(ctx, collegeA, created.ID)
+	if err != nil {
+		t.Fatalf("list group members: %v", err)
+	}
+	if len(members) != 1 {
+		t.Fatalf("expected 1 member, got %d", len(members))
+	}
+	if members[0].UserID != studentID {
+		t.Errorf(
+			"expected member user ID %d, got %d",
+			studentID,
+			members[0].UserID,
+		)
+	}
+
+	// College B must not be able to access college A's group members.
+	_, err = service.ListMembers(ctx, collegeB, created.ID)
+	if err != ErrGroupNotFound {
+		t.Errorf(
+			"expected ErrGroupNotFound for cross-college access, got %v",
+			err,
+		)
+	}
+
+	// Invalid IDs should be rejected.
+	_, err = service.ListMembers(ctx, 0, created.ID)
+	if err != ErrInvalidInput {
+		t.Errorf(
+			"expected ErrInvalidInput for college ID 0, got %v",
+			err,
+		)
+	}
+
+	_, err = service.ListMembers(ctx, collegeA, 0)
+	if err != ErrInvalidInput {
+		t.Errorf(
+			"expected ErrInvalidInput for group ID 0, got %v",
+			err,
+		)
+	}
+
+	// Invalid tenant IDs should be rejected by List as well.
 	_, err = service.List(ctx, 0)
 	if err != ErrInvalidInput {
 		t.Errorf("expected ErrInvalidInput for college ID 0, got %v", err)

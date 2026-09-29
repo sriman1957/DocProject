@@ -16,6 +16,7 @@ import (
 	"docproject/backend/internal/auth"
 	"docproject/backend/internal/config"
 	"docproject/backend/internal/groups"
+	"docproject/backend/internal/users"
 )
 
 func main() {
@@ -80,9 +81,21 @@ func run() error {
 	groupsService := groups.NewService(database)
 	groupsHandler := groups.NewHandler(groupsService)
 
+	protectedGroupsHandler := auth.AuthMiddleware(
+		tokenService,
+		groupsHandler,
+	)
+
+	mux.Handle("/groups", protectedGroupsHandler)
+	mux.Handle("/groups/", protectedGroupsHandler)
+
+	// User routes
+	usersService := users.NewService(database)
+	usersHandler := users.NewHandler(usersService)
+
 	mux.Handle(
-		"/groups",
-		auth.AuthMiddleware(tokenService, groupsHandler),
+		"/users",
+		auth.AuthMiddleware(tokenService, usersHandler),
 	)
 
 	// Health routes

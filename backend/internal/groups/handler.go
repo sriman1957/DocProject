@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 
 	"docproject/backend/internal/auth"
 )
@@ -13,6 +14,10 @@ import (
 type createGroupRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+}
+
+type addMemberRequest struct {
+	UserID int64 `json:"user_id"`
 }
 
 type errorResponse struct {
@@ -31,12 +36,26 @@ type groupService interface {
 		ctx context.Context,
 		collegeID int64,
 	) ([]Group, error)
+
+	AddMember(
+		ctx context.Context,
+		collegeID int64,
+		groupID int64,
+		input AddMemberInput,
+	) (Member, error)
+
+	ListMembers(
+		ctx context.Context,
+		collegeID int64,
+		groupID int64,
+	) ([]Member, error)
 }
 
 // NewHandler creates the HTTP handler for group operations.
 func NewHandler(service groupService) http.Handler {
 	mux := http.NewServeMux()
 
+	// Create a group.
 	mux.HandleFunc("POST /groups", func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := auth.ClaimsFromContext(r.Context())
 		if !ok {
@@ -102,6 +121,7 @@ func NewHandler(service groupService) http.Handler {
 		writeJSON(w, http.StatusCreated, group)
 	})
 
+	// List groups.
 	mux.HandleFunc("GET /groups", func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := auth.ClaimsFromContext(r.Context())
 		if !ok {
@@ -122,6 +142,7 @@ func NewHandler(service groupService) http.Handler {
 			r.Context(),
 			claims.CollegeID,
 		)
+
 		if errors.Is(err, ErrInvalidInput) {
 			writeJSON(w, http.StatusBadRequest, errorResponse{
 				Error: "invalid group input",
@@ -137,6 +158,151 @@ func NewHandler(service groupService) http.Handler {
 		}
 
 		writeJSON(w, http.StatusOK, groups)
+	})
+
+	// List members of a group.
+	mux.HandleFunc("GET /groups/{group_id}/members", func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := auth.ClaimsFromContext(r.Context())
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, errorResponse{
+				Error: "unauthorized",
+			})
+			return
+		}
+
+		if claims.Role != "college_admin" {
+			writeJSON(w, http.StatusForbidden, errorResponse{
+				Error: "forbidden",
+			})
+			return
+		}
+
+		groupID, err := strconv.ParseInt(r.PathValue("group_id"), 10, 64)
+		if err != nil || groupID <= 0 {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error: "invalid group ID",
+			})
+			return
+		}
+
+		members, err := service.ListMembers(
+			r.Context(),
+			claims.CollegeID,
+			groupID,
+		)
+
+		switch {
+		case errors.Is(err, ErrInvalidInput):
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error: "invalid group input",
+			})
+			return
+
+		case errors.Is(err, ErrGroupNotFound):
+			writeJSON(w, http.StatusNotFound, errorResponse{
+				Error: "group not found",
+			})
+			return
+
+		case err != nil:
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error: "internal server error",
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, members)
+	})
+
+	// Add a member to a group.
+	mux.HandleFunc("POST /groups/{group_id}/members", func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := auth.ClaimsFromContext(r.Context())
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, errorResponse{
+				Error: "unauthorized",
+			})
+			return
+		}
+
+		if claims.Role != "college_admin" {
+			writeJSON(w, http.StatusForbidden, errorResponse{
+				Error: "forbidden",
+			})
+			return
+		}
+
+		groupID, err := strconv.ParseInt(r.PathValue("group_id"), 10, 64)
+		if err != nil || groupID <= 0 {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error: "invalid group ID",
+			})
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
+		var request addMemberRequest
+
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+
+		if err := decoder.Decode(&request); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error: "invalid request body",
+			})
+			return
+		}
+
+		var extra any
+		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error: "invalid request body",
+			})
+			return
+		}
+
+		member, err := service.AddMember(
+			r.Context(),
+			claims.CollegeID,
+			groupID,
+			AddMemberInput{
+				UserID: request.UserID,
+			},
+		)
+
+		switch {
+		case errors.Is(err, ErrInvalidInput):
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error: "invalid membership input",
+			})
+			return
+
+		case errors.Is(err, ErrGroupNotFound):
+			writeJSON(w, http.StatusNotFound, errorResponse{
+				Error: "group not found",
+			})
+			return
+
+		case errors.Is(err, ErrMemberNotFound):
+			writeJSON(w, http.StatusNotFound, errorResponse{
+				Error: "eligible user not found",
+			})
+			return
+
+		case errors.Is(err, ErrMembershipExists):
+			writeJSON(w, http.StatusConflict, errorResponse{
+				Error: "user is already a member of this group",
+			})
+			return
+
+		case err != nil:
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error: "internal server error",
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, member)
 	})
 
 	return mux
