@@ -16,6 +16,7 @@ import (
 	"docproject/backend/internal/auth"
 	"docproject/backend/internal/config"
 	"docproject/backend/internal/groups"
+	"docproject/backend/internal/subgroups"
 	"docproject/backend/internal/users"
 )
 
@@ -96,6 +97,25 @@ func run() error {
 	mux.Handle(
 		"/users",
 		auth.AuthMiddleware(tokenService, usersHandler),
+	)
+
+	// Subgroup routes
+	subgroupsService := subgroups.NewService(database)
+	subgroupsHandler := subgroups.NewHandler(subgroupsService)
+
+	protectedSubgroupsHandler := auth.AuthMiddleware(
+		tokenService,
+		subgroupsHandler,
+	)
+
+	mux.Handle(
+		"POST /groups/{group_id}/subgroups",
+		protectedSubgroupsHandler,
+	)
+
+	mux.Handle(
+		"GET /groups/{group_id}/subgroups",
+		protectedSubgroupsHandler,
 	)
 
 	// Health routes
