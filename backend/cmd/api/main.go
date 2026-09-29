@@ -15,6 +15,7 @@ import (
 	"docproject/backend/db"
 	"docproject/backend/internal/auth"
 	"docproject/backend/internal/config"
+	"docproject/backend/internal/groups"
 )
 
 func main() {
@@ -39,6 +40,7 @@ func run() error {
 	defer database.Close()
 
 	mux := http.NewServeMux()
+
 	authService := auth.NewService(database)
 
 	tokenService := auth.NewTokenService(
@@ -52,6 +54,7 @@ func run() error {
 		logger,
 	)
 
+	// Authentication routes
 	mux.Handle("POST /auth/login", authHandler)
 
 	mux.Handle("GET /auth/me", auth.AuthMiddleware(
@@ -73,6 +76,16 @@ func run() error {
 		}),
 	))
 
+	// Group routes
+	groupsService := groups.NewService(database)
+	groupsHandler := groups.NewHandler(groupsService)
+
+	mux.Handle(
+		"/groups",
+		auth.AuthMiddleware(tokenService, groupsHandler),
+	)
+
+	// Health routes
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{
 			"status": "alive",
