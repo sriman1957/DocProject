@@ -11,7 +11,7 @@ import (
 
 var (
 	ErrInvalidInput         = errors.New("invalid access period input")
-	ErrGroupNotFound        = errors.New("group not found")
+	ErrForbidden            = errors.New("forbidden")
 	ErrSubgroupNotFound     = errors.New("subgroup not found")
 	ErrAccessPeriodOverlap  = errors.New("access period overlaps an existing period")
 	ErrAccessPeriodNotFound = errors.New("access period not found")
@@ -27,17 +27,20 @@ type Service struct {
 }
 
 func NewService(database Querier) *Service {
-	return &Service{db: database}
+	return &Service{
+		db: database,
+	}
 }
 
 type AccessPeriod struct {
-	ID         int64  `json:"id"`
-	SubgroupID int64  `json:"subgroup_id"`
-	CollegeID  int64  `json:"college_id"`
-	StartsAt   string `json:"starts_at"`
-	EndsAt     string `json:"ends_at"`
-	CreatedBy  int64  `json:"created_by"`
-	CreatedAt  string `json:"created_at"`
+	ID         int64
+	SubgroupID int64
+	GroupID    int64
+	CollegeID  int64
+	StartsAt   string
+	EndsAt     string
+	CreatedBy  int64
+	CreatedAt  string
 }
 
 type CreateInput struct {
@@ -45,38 +48,46 @@ type CreateInput struct {
 	EndsAt   string
 }
 
-// Create creates a new access period for an active subgroup.
+// checkAuthorization verifies that the actor is authorized to
+// manage access periods for the requested subgroup.
 //
-// Access periods are append-only. Reopening a subgroup creates a new
-// period rather than modifying an existing one. PostgreSQL enforces
-// that periods for the same subgroup cannot overlap.
-func (s *Service) Create(
+// College admins can manage access periods throughout their college.
+//
+// Faculty members must have an active assignment to the requested
+// subgroup.
+//
+// Students and all other roles are forbidden.
+func (s *Service) checkAuthorization(
 	ctx context.Context,
 	collegeID int64,
-	createdBy int64,
+	actorID int64,
+	actorRole string,
 	groupID int64,
 	subgroupID int64,
-	input CreateInput,
-) (AccessPeriod, error) {
-	if collegeID <= 0 || createdBy <= 0 || groupID <= 0 || subgroupID <= 0 {
-		return AccessPeriod{}, ErrInvalidInput
+) error {
+	if collegeID <= 0 ||
+		actorID <= 0 ||
+		groupID <= 0 ||
+		subgroupID <= 0 {
+		return ErrInvalidInput
 	}
 
-	if input.StartsAt == "" || input.EndsAt == "" ||
-		input.StartsAt >= input.EndsAt {
-		return AccessPeriod{}, ErrInvalidInput
+	if actorRole != "college_admin" && actorRole != "faculty" {
+		return ErrForbidden
 	}
 
 	const subgroupQuery = `
-		SELECT id
-		FROM subgroups
-		WHERE id = $1
-		  AND group_id = $2
-		  AND college_id = $3
-		  AND is_active = TRUE
+		SELECT EXISTS (
+			SELECT 1
+			FROM subgroups
+			WHERE id = $1
+			  AND group_id = $2
+			  AND college_id = $3
+			  AND is_active = TRUE
+		)
 	`
 
-	var foundSubgroupID int64
+	var subgroupExists bool
 
 	err := s.db.QueryRow(
 		ctx,
@@ -84,17 +95,97 @@ func (s *Service) Create(
 		subgroupID,
 		groupID,
 		collegeID,
-	).Scan(&foundSubgroupID)
-
-	if errors.Is(err, pgx.ErrNoRows) {
-		return AccessPeriod{}, ErrSubgroupNotFound
-	}
+	).Scan(&subgroupExists)
 
 	if err != nil {
-		return AccessPeriod{}, fmt.Errorf(
-			"create access period: check subgroup: %w",
+		return fmt.Errorf(
+			"check access period subgroup: %w",
 			err,
 		)
+	}
+
+	if !subgroupExists {
+		return ErrSubgroupNotFound
+	}
+
+	// College admins can manage access periods throughout
+	// their own college.
+	if actorRole == "college_admin" {
+		return nil
+	}
+
+	const assignmentQuery = `
+		SELECT EXISTS (
+			SELECT 1
+			FROM subgroup_faculty_assignments
+			WHERE college_id = $1
+			  AND subgroup_id = $2
+			  AND faculty_id = $3
+			  AND revoked_at IS NULL
+		)
+	`
+
+	var assigned bool
+
+	err = s.db.QueryRow(
+		ctx,
+		assignmentQuery,
+		collegeID,
+		subgroupID,
+		actorID,
+	).Scan(&assigned)
+
+	if err != nil {
+		return fmt.Errorf(
+			"check access period faculty assignment: %w",
+			err,
+		)
+	}
+
+	if !assigned {
+		return ErrForbidden
+	}
+
+	return nil
+}
+
+// Create creates a new access period for an authorized actor.
+//
+// Access periods are append-only. Reopening a subgroup creates
+// a new access period instead of modifying an existing period.
+//
+// PostgreSQL prevents overlapping periods for the same subgroup.
+func (s *Service) Create(
+	ctx context.Context,
+	collegeID int64,
+	actorID int64,
+	actorRole string,
+	groupID int64,
+	subgroupID int64,
+	input CreateInput,
+) (AccessPeriod, error) {
+	if collegeID <= 0 ||
+		actorID <= 0 ||
+		groupID <= 0 ||
+		subgroupID <= 0 {
+		return AccessPeriod{}, ErrInvalidInput
+	}
+
+	if input.StartsAt == "" ||
+		input.EndsAt == "" ||
+		input.StartsAt >= input.EndsAt {
+		return AccessPeriod{}, ErrInvalidInput
+	}
+
+	if err := s.checkAuthorization(
+		ctx,
+		collegeID,
+		actorID,
+		actorRole,
+		groupID,
+		subgroupID,
+	); err != nil {
+		return AccessPeriod{}, err
 	}
 
 	const insertQuery = `
@@ -105,7 +196,13 @@ func (s *Service) Create(
 			ends_at,
 			created_by
 		)
-		VALUES ($1, $2, $3::timestamptz, $4::timestamptz, $5)
+		VALUES (
+			$1,
+			$2,
+			$3::timestamptz,
+			$4::timestamptz,
+			$5
+		)
 		RETURNING
 			id,
 			subgroup_id,
@@ -118,14 +215,14 @@ func (s *Service) Create(
 
 	var period AccessPeriod
 
-	err = s.db.QueryRow(
+	err := s.db.QueryRow(
 		ctx,
 		insertQuery,
 		subgroupID,
 		collegeID,
 		input.StartsAt,
 		input.EndsAt,
-		createdBy,
+		actorID,
 	).Scan(
 		&period.ID,
 		&period.SubgroupID,
@@ -151,48 +248,41 @@ func (s *Service) Create(
 		)
 	}
 
+	// group_id is not stored in subgroup_access_periods.
+	// It was already validated by checkAuthorization and is
+	// therefore added to the response object here.
+	period.GroupID = groupID
+
 	return period, nil
 }
 
-// List returns all access periods for an active subgroup in chronological order.
+// List returns all access periods for an authorized actor.
+//
+// Results are ordered chronologically by start time.
 func (s *Service) List(
 	ctx context.Context,
 	collegeID int64,
+	actorID int64,
+	actorRole string,
 	groupID int64,
 	subgroupID int64,
 ) ([]AccessPeriod, error) {
-	if collegeID <= 0 || groupID <= 0 || subgroupID <= 0 {
+	if collegeID <= 0 ||
+		actorID <= 0 ||
+		groupID <= 0 ||
+		subgroupID <= 0 {
 		return nil, ErrInvalidInput
 	}
 
-	const subgroupQuery = `
-		SELECT id
-		FROM subgroups
-		WHERE id = $1
-		  AND group_id = $2
-		  AND college_id = $3
-		  AND is_active = TRUE
-	`
-
-	var foundSubgroupID int64
-
-	err := s.db.QueryRow(
+	if err := s.checkAuthorization(
 		ctx,
-		subgroupQuery,
-		subgroupID,
-		groupID,
 		collegeID,
-	).Scan(&foundSubgroupID)
-
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrSubgroupNotFound
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf(
-			"list access periods: check subgroup: %w",
-			err,
-		)
+		actorID,
+		actorRole,
+		groupID,
+		subgroupID,
+	); err != nil {
+		return nil, err
 	}
 
 	const listQuery = `
@@ -210,9 +300,17 @@ func (s *Service) List(
 		ORDER BY starts_at ASC, id ASC
 	`
 
-	rows, err := s.db.Query(ctx, listQuery, subgroupID, collegeID)
+	rows, err := s.db.Query(
+		ctx,
+		listQuery,
+		subgroupID,
+		collegeID,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("list access periods: query: %w", err)
+		return nil, fmt.Errorf(
+			"list access periods: query: %w",
+			err,
+		)
 	}
 	defer rows.Close()
 
@@ -230,21 +328,38 @@ func (s *Service) List(
 			&period.CreatedBy,
 			&period.CreatedAt,
 		); err != nil {
-			return nil, fmt.Errorf("list access periods: scan: %w", err)
+			return nil, fmt.Errorf(
+				"list access periods: scan: %w",
+				err,
+			)
 		}
+
+		// group_id is not stored in subgroup_access_periods.
+		// It comes from the validated request context.
+		period.GroupID = groupID
 
 		result = append(result, period)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list access periods: rows: %w", err)
+		return nil, fmt.Errorf(
+			"list access periods: rows: %w",
+			err,
+		)
 	}
 
 	return result, nil
 }
 
 // Current returns the access period containing the supplied instant.
-// Periods use half-open intervals: [starts_at, ends_at).
+//
+// Access periods use half-open intervals:
+//
+// [starts_at, ends_at)
+//
+// Therefore:
+//
+// starts_at <= time < ends_at
 func (s *Service) Current(
 	ctx context.Context,
 	collegeID int64,
@@ -252,7 +367,10 @@ func (s *Service) Current(
 	subgroupID int64,
 	at string,
 ) (AccessPeriod, error) {
-	if collegeID <= 0 || groupID <= 0 || subgroupID <= 0 || at == "" {
+	if collegeID <= 0 ||
+		groupID <= 0 ||
+		subgroupID <= 0 ||
+		at == "" {
 		return AccessPeriod{}, ErrInvalidInput
 	}
 
@@ -308,6 +426,10 @@ func (s *Service) Current(
 			err,
 		)
 	}
+
+	// group_id is not stored in subgroup_access_periods.
+	// It is already validated by the query above.
+	period.GroupID = groupID
 
 	return period, nil
 }
