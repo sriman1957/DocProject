@@ -20,6 +20,7 @@ import (
 	"docproject/backend/internal/subgroupassignments"
 	"docproject/backend/internal/subgroups"
 	"docproject/backend/internal/users"
+	"docproject/backend/internal/documents"
 )
 
 func main() {
@@ -139,6 +140,14 @@ func run() error {
 	mux.Handle(
 		"GET /groups/{group_id}/subgroups/{subgroup_id}/access-periods",
 		protectedAccessPeriodsHandler,
+	)
+
+	documentsService := documents.NewService(database)
+	documentsHandler := documents.NewHandler(documentsService)
+
+	mux.Handle(
+		"/documents",
+		auth.AuthMiddleware(tokenService, documentsHandler),
 	)
 
 	// Subgroup faculty assignment routes
