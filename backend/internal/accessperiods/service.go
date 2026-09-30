@@ -433,3 +433,141 @@ func (s *Service) Current(
 
 	return period, nil
 }
+
+// AuthorizeStudentAccess verifies that a student is allowed to access
+// a subgroup at the specified time.
+//
+// A student must:
+//   - belong to the requested college
+//   - be a student member of the requested group
+//   - access an active subgroup belonging to that group
+//   - have a currently active access period
+//
+// Access periods use half-open intervals:
+// [starts_at, ends_at)
+func (s *Service) AuthorizeStudentAccess(
+	ctx context.Context,
+	collegeID int64,
+	studentID int64,
+	groupID int64,
+	subgroupID int64,
+	at string,
+) error {
+	if collegeID <= 0 ||
+		studentID <= 0 ||
+		groupID <= 0 ||
+		subgroupID <= 0 ||
+		at == "" {
+		return ErrInvalidInput
+	}
+
+	// Verify that the student is a member of the requested group.
+	const membershipQuery = `
+		SELECT EXISTS (
+			SELECT 1
+			FROM group_memberships
+			WHERE college_id = $1
+			  AND group_id = $2
+			  AND user_id = $3
+			  AND membership_role = 'student'
+		)
+	`
+
+	var isMember bool
+
+	err := s.db.QueryRow(
+		ctx,
+		membershipQuery,
+		collegeID,
+		groupID,
+		studentID,
+	).Scan(&isMember)
+
+	if err != nil {
+		return fmt.Errorf(
+			"authorize student subgroup access: check membership: %w",
+			err,
+		)
+	}
+
+	if !isMember {
+		return ErrForbidden
+	}
+
+	// Verify that the subgroup belongs to the requested group and college
+	// and has not been archived.
+	const subgroupQuery = `
+		SELECT EXISTS (
+			SELECT 1
+			FROM subgroups
+			WHERE id = $1
+			  AND group_id = $2
+			  AND college_id = $3
+			  AND is_active = TRUE
+		)
+	`
+
+	var subgroupExists bool
+
+	err = s.db.QueryRow(
+		ctx,
+		subgroupQuery,
+		subgroupID,
+		groupID,
+		collegeID,
+	).Scan(&subgroupExists)
+
+	if err != nil {
+		return fmt.Errorf(
+			"authorize student subgroup access: check subgroup: %w",
+			err,
+		)
+	}
+
+	if !subgroupExists {
+		return ErrForbidden
+	}
+
+	// Verify that the requested time falls inside an access period.
+	//
+	// The interval is half-open:
+	//
+	//     starts_at <= at < ends_at
+	//
+	// Therefore:
+	// - exactly at starts_at -> allowed
+	// - exactly at ends_at   -> denied
+	const accessPeriodQuery = `
+		SELECT EXISTS (
+			SELECT 1
+			FROM subgroup_access_periods
+			WHERE subgroup_id = $1
+			  AND college_id = $2
+			  AND starts_at <= $3::timestamptz
+			  AND ends_at > $3::timestamptz
+		)
+	`
+
+	var hasAccessPeriod bool
+
+	err = s.db.QueryRow(
+		ctx,
+		accessPeriodQuery,
+		subgroupID,
+		collegeID,
+		at,
+	).Scan(&hasAccessPeriod)
+
+	if err != nil {
+		return fmt.Errorf(
+			"authorize student subgroup access: check access period: %w",
+			err,
+		)
+	}
+
+	if !hasAccessPeriod {
+		return ErrForbidden
+	}
+
+	return nil
+}

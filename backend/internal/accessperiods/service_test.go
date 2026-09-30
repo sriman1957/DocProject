@@ -768,3 +768,364 @@ func TestCurrentMapsNoActivePeriod(t *testing.T) {
 		)
 	}
 }
+
+func TestServiceAuthorizeStudentAccess_AllowsStudentInsidePeriod(t *testing.T) {
+	t.Parallel()
+
+	var queryCount int
+
+	db := &mockDB{
+		queryRowFn: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			queryCount++
+
+			switch queryCount {
+			case 1:
+				return mockRow{values: []any{true}}
+			case 2:
+				return mockRow{values: []any{true}}
+			case 3:
+				return mockRow{values: []any{true}}
+			default:
+				return mockRow{err: errors.New("unexpected QueryRow call")}
+			}
+		},
+	}
+
+	service := NewService(db)
+
+	err := service.AuthorizeStudentAccess(
+		context.Background(),
+		1,
+		20,
+		10,
+		100,
+		"2026-09-29T10:00:00Z",
+	)
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if queryCount != 3 {
+		t.Fatalf("expected 3 QueryRow calls, got %d", queryCount)
+	}
+}
+
+func TestServiceAuthorizeStudentAccess_StudentNotMemberForbidden(t *testing.T) {
+	t.Parallel()
+
+	var queryCount int
+
+	db := &mockDB{
+		queryRowFn: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			queryCount++
+
+			if queryCount != 1 {
+				return mockRow{err: errors.New("unexpected QueryRow call")}
+			}
+
+			return mockRow{values: []any{false}}
+		},
+	}
+
+	service := NewService(db)
+
+	err := service.AuthorizeStudentAccess(
+		context.Background(),
+		1,
+		20,
+		10,
+		100,
+		"2026-09-29T10:00:00Z",
+	)
+
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+
+	if queryCount != 1 {
+		t.Fatalf("expected 1 QueryRow call, got %d", queryCount)
+	}
+}
+
+func TestServiceAuthorizeStudentAccess_SubgroupForbidden(t *testing.T) {
+	t.Parallel()
+
+	var queryCount int
+
+	db := &mockDB{
+		queryRowFn: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			queryCount++
+
+			switch queryCount {
+			case 1:
+				return mockRow{values: []any{true}}
+			case 2:
+				return mockRow{values: []any{false}}
+			default:
+				return mockRow{err: errors.New("unexpected QueryRow call")}
+			}
+		},
+	}
+
+	service := NewService(db)
+
+	err := service.AuthorizeStudentAccess(
+		context.Background(),
+		1,
+		20,
+		10,
+		100,
+		"2026-09-29T10:00:00Z",
+	)
+
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+
+	if queryCount != 2 {
+		t.Fatalf("expected 2 QueryRow calls, got %d", queryCount)
+	}
+}
+
+func TestServiceAuthorizeStudentAccess_NoCurrentPeriodForbidden(t *testing.T) {
+	t.Parallel()
+
+	var queryCount int
+
+	db := &mockDB{
+		queryRowFn: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			queryCount++
+
+			switch queryCount {
+			case 1, 2:
+				return mockRow{values: []any{true}}
+			case 3:
+				return mockRow{values: []any{false}}
+			default:
+				return mockRow{err: errors.New("unexpected QueryRow call")}
+			}
+		},
+	}
+
+	service := NewService(db)
+
+	err := service.AuthorizeStudentAccess(
+		context.Background(),
+		1,
+		20,
+		10,
+		100,
+		"2026-09-29T13:00:00Z",
+	)
+
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+
+	if queryCount != 3 {
+		t.Fatalf("expected 3 QueryRow calls, got %d", queryCount)
+	}
+}
+
+func TestServiceAuthorizeStudentAccess_InvalidInput(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(nil)
+
+	tests := []struct {
+		name       string
+		collegeID  int64
+		studentID  int64
+		groupID    int64
+		subgroupID int64
+		at         string
+	}{
+		{
+			name:       "invalid college",
+			collegeID:  0,
+			studentID:  20,
+			groupID:    10,
+			subgroupID: 100,
+			at:         "2026-09-29T10:00:00Z",
+		},
+		{
+			name:       "invalid student",
+			collegeID:  1,
+			studentID:  0,
+			groupID:    10,
+			subgroupID: 100,
+			at:         "2026-09-29T10:00:00Z",
+		},
+		{
+			name:       "invalid group",
+			collegeID:  1,
+			studentID:  20,
+			groupID:    0,
+			subgroupID: 100,
+			at:         "2026-09-29T10:00:00Z",
+		},
+		{
+			name:       "invalid subgroup",
+			collegeID:  1,
+			studentID:  20,
+			groupID:    10,
+			subgroupID: 0,
+			at:         "2026-09-29T10:00:00Z",
+		},
+		{
+			name:       "missing time",
+			collegeID:  1,
+			studentID:  20,
+			groupID:    10,
+			subgroupID: 100,
+			at:         "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := service.AuthorizeStudentAccess(
+				context.Background(),
+				tt.collegeID,
+				tt.studentID,
+				tt.groupID,
+				tt.subgroupID,
+				tt.at,
+			)
+
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected ErrInvalidInput, got %v", err)
+			}
+		})
+	}
+}
+
+func TestServiceAuthorizeStudentAccess_MembershipQueryError(t *testing.T) {
+	t.Parallel()
+
+	expectedErr := errors.New("database failure")
+
+	db := &mockDB{
+		queryRowFn: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			return mockRow{err: expectedErr}
+		},
+	}
+
+	service := NewService(db)
+
+	err := service.AuthorizeStudentAccess(
+		context.Background(),
+		1,
+		20,
+		10,
+		100,
+		"2026-09-29T10:00:00Z",
+	)
+
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected database error, got %v", err)
+	}
+}
+
+func TestServiceAuthorizeStudentAccess_SubgroupQueryError(t *testing.T) {
+	t.Parallel()
+
+	expectedErr := errors.New("database failure")
+	var queryCount int
+
+	db := &mockDB{
+		queryRowFn: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			queryCount++
+
+			switch queryCount {
+			case 1:
+				return mockRow{values: []any{true}}
+			case 2:
+				return mockRow{err: expectedErr}
+			default:
+				return mockRow{err: errors.New("unexpected QueryRow call")}
+			}
+		},
+	}
+
+	service := NewService(db)
+
+	err := service.AuthorizeStudentAccess(
+		context.Background(),
+		1,
+		20,
+		10,
+		100,
+		"2026-09-29T10:00:00Z",
+	)
+
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected database error, got %v", err)
+	}
+}
+
+func TestServiceAuthorizeStudentAccess_AccessPeriodQueryError(t *testing.T) {
+	t.Parallel()
+
+	expectedErr := errors.New("database failure")
+	var queryCount int
+
+	db := &mockDB{
+		queryRowFn: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			queryCount++
+
+			switch queryCount {
+			case 1, 2:
+				return mockRow{values: []any{true}}
+			case 3:
+				return mockRow{err: expectedErr}
+			default:
+				return mockRow{err: errors.New("unexpected QueryRow call")}
+			}
+		},
+	}
+
+	service := NewService(db)
+
+	err := service.AuthorizeStudentAccess(
+		context.Background(),
+		1,
+		20,
+		10,
+		100,
+		"2026-09-29T10:00:00Z",
+	)
+
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected database error, got %v", err)
+	}
+}
