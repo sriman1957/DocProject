@@ -376,6 +376,68 @@ func (s *Service) checkGroupAccessForList(
 	return nil
 }
 
+func (s *Service) Current(
+	ctx context.Context,
+	collegeID int64,
+	actorID int64,
+	actorRole string,
+	groupID int64,
+	subgroupID int64,
+	at time.Time,
+) (*AccessPeriod, error) {
+	if collegeID <= 0 || actorID <= 0 || groupID <= 0 || subgroupID <= 0 || at.IsZero() {
+		return nil, ErrInvalidInput
+	}
+
+	if actorRole != "college_admin" && actorRole != "faculty" && actorRole != "student" {
+		return nil, ErrForbidden
+	}
+
+	if err := s.checkGroupAccessForList(ctx, collegeID, actorID, actorRole, groupID); err != nil {
+		return nil, err
+	}
+	if err := s.checkSubgroup(ctx, collegeID, groupID, subgroupID); err != nil {
+		return nil, err
+	}
+
+	const query = `
+		SELECT
+			id,
+			subgroup_id,
+			college_id,
+			starts_at::text,
+			ends_at::text,
+			created_by,
+			created_at::text
+		FROM subgroup_access_periods
+		WHERE college_id = $1
+		  AND subgroup_id = $2
+		  AND starts_at <= $3
+		  AND ends_at > $3
+		ORDER BY starts_at DESC, id DESC
+		LIMIT 1
+	`
+
+	var period AccessPeriod
+	err := s.db.QueryRow(ctx, query, collegeID, subgroupID, at).Scan(
+		&period.ID,
+		&period.SubgroupID,
+		&period.CollegeID,
+		&period.StartsAt,
+		&period.EndsAt,
+		&period.CreatedBy,
+		&period.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get current access period: %w", err)
+	}
+
+	return &period, nil
+}
+
 func (s *Service) IsOpen(
 	ctx context.Context,
 	collegeID int64,
