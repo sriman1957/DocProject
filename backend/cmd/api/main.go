@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"docproject/backend/db"
+	"docproject/backend/internal/accessperiods"
 	"docproject/backend/internal/auth"
 	"docproject/backend/internal/config"
 	"docproject/backend/internal/groups"
@@ -143,6 +144,26 @@ func run() error {
 	mux.Handle(
 		"DELETE /groups/{group_id}/subgroups/{subgroup_id}/faculty/{faculty_id}",
 		protectedSubgroupAssignmentsHandler,
+	)
+
+
+	// Subgroup access-period routes
+	accessPeriodsService := accessperiods.NewService(database)
+	accessPeriodsHandler := accessperiods.NewHandler(accessPeriodsService)
+
+	protectedAccessPeriodsHandler := auth.AuthMiddleware(
+		tokenService,
+		accessPeriodsHandler,
+	)
+
+	mux.Handle(
+		"POST /groups/{group_id}/subgroups/{subgroup_id}/access-periods",
+		protectedAccessPeriodsHandler,
+	)
+
+	mux.Handle(
+		"GET /groups/{group_id}/subgroups/{subgroup_id}/access-periods",
+		protectedAccessPeriodsHandler,
 	)
 
 	// Health routes
