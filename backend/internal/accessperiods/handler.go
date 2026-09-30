@@ -20,6 +20,7 @@ type createRequest struct {
 type service interface {
 	Create(context.Context, int64, int64, string, int64, int64, CreateInput) (AccessPeriod, error)
 	List(context.Context, int64, int64, string, int64, int64) ([]AccessPeriod, error)
+	Current(context.Context, int64, int64, string, int64, int64, time.Time) (*AccessPeriod, error)
 }
 
 func NewHandler(s service) http.Handler {
@@ -81,6 +82,49 @@ func NewHandler(s service) http.Handler {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		default:
 			writeJSON(w, http.StatusCreated, period)
+		}
+	})
+
+	mux.HandleFunc("GET /groups/{group_id}/subgroups/{subgroup_id}/access-periods/current", func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := auth.ClaimsFromContext(r.Context())
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if claims.Role != "college_admin" && claims.Role != "faculty" && claims.Role != "student" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+
+		groupID, subgroupID, ok := parseIDs(r)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid ID"})
+			return
+		}
+
+		period, err := s.Current(
+			r.Context(),
+			claims.CollegeID,
+			claims.UserID,
+			claims.Role,
+			groupID,
+			subgroupID,
+			time.Now(),
+		)
+		switch {
+		case errors.Is(err, ErrInvalidInput):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid access period"})
+		case errors.Is(err, ErrForbidden):
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		case errors.Is(err, ErrGroupNotFound), errors.Is(err, ErrSubgroupNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "group or subgroup not found"})
+		case err != nil:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		default:
+			writeJSON(w, http.StatusOK, map[string]any{
+				"is_open": period != nil,
+				"period":  period,
+			})
 		}
 	})
 
