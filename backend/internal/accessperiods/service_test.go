@@ -592,3 +592,179 @@ func TestCreateAccessPeriodAuthorization_QueryError(
 		)
 	}
 }
+
+func TestCreateRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(nil)
+
+	tests := []CreateInput{
+		{},
+		{
+			StartsAt: "2026-10-01T10:00:00Z",
+		},
+		{
+			EndsAt: "2026-10-01T10:00:00Z",
+		},
+		{
+			StartsAt: "2026-10-01T11:00:00Z",
+			EndsAt:   "2026-10-01T10:00:00Z",
+		},
+	}
+
+	for _, input := range tests {
+		_, err := service.Create(
+			context.Background(),
+			1,
+			1,
+			"college_admin",
+			1,
+			1,
+			input,
+		)
+
+		if !errors.Is(err, ErrInvalidInput) {
+			t.Errorf(
+				"input %+v: expected ErrInvalidInput, got %v",
+				input,
+				err,
+			)
+		}
+	}
+}
+
+func TestCreateRejectsInvalidIDs(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(nil)
+
+	_, err := service.Create(
+		context.Background(),
+		0,
+		1,
+		"college_admin",
+		1,
+		1,
+		CreateInput{
+			StartsAt: "2026-10-01T10:00:00Z",
+			EndsAt:   "2026-10-01T11:00:00Z",
+		},
+	)
+
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf(
+			"expected ErrInvalidInput, got %v",
+			err,
+		)
+	}
+}
+
+func TestCreateMapsMissingSubgroup(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(&mockDB{
+		queryRowFn: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			return mockRow{
+				values: []any{false},
+			}
+		},
+	})
+
+	_, err := service.Create(
+		context.Background(),
+		1,
+		1,
+		"college_admin",
+		10,
+		20,
+		CreateInput{
+			StartsAt: "2026-10-01T10:00:00Z",
+			EndsAt:   "2026-10-01T11:00:00Z",
+		},
+	)
+
+	if !errors.Is(err, ErrSubgroupNotFound) {
+		t.Fatalf(
+			"expected ErrSubgroupNotFound, got %v",
+			err,
+		)
+	}
+}
+
+func TestListRejectsInvalidIDs(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(nil)
+
+	_, err := service.List(
+		context.Background(),
+		1,
+		1,
+		"college_admin",
+		1,
+		0,
+	)
+
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf(
+			"expected ErrInvalidInput, got %v",
+			err,
+		)
+	}
+}
+
+func TestCurrentRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(nil)
+
+	_, err := service.Current(
+		context.Background(),
+		1,
+		1,
+		1,
+		"",
+	)
+
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf(
+			"expected ErrInvalidInput, got %v",
+			err,
+		)
+	}
+}
+
+func TestCurrentMapsNoActivePeriod(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(&mockDB{
+		queryRowFn: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			return mockRow{
+				err: pgx.ErrNoRows,
+			}
+		},
+	})
+
+	_, err := service.Current(
+		context.Background(),
+		1,
+		1,
+		1,
+		"2026-10-01T10:30:00Z",
+	)
+
+	if !errors.Is(err, ErrAccessPeriodNotFound) {
+		t.Fatalf(
+			"expected ErrAccessPeriodNotFound, got %v",
+			err,
+		)
+	}
+}
