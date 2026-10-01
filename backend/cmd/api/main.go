@@ -164,6 +164,14 @@ func run() error {
 		),
 	)
 
+	mux.Handle(
+		"/documents/",
+		auth.AuthMiddleware(
+			tokenService,
+			documentsHandler,
+		),
+	)
+
 	// Subgroup faculty assignment routes
 	subgroupAssignmentsService := subgroupassignments.NewService(database)
 	subgroupAssignmentsHandler := subgroupassignments.NewHandler(
