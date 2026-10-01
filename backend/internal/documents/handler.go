@@ -266,10 +266,16 @@ func (h *Handler) previewPersonalVaultDocument(
 		strconv.FormatInt(document.FileSizeBytes, 10),
 	)
 
+	safeFilename := strings.NewReplacer(
+		"\r", "",
+		"\n", "",
+		"\"", "",
+	).Replace(document.OriginalFilename)
+
 	w.Header().Set(
 		"Content-Disposition",
 		"inline; filename=\""+
-			strings.ReplaceAll(document.OriginalFilename, "\"", "")+
+			safeFilename+
 			"\"",
 	)
 
