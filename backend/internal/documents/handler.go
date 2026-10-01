@@ -199,17 +199,26 @@ func (h *Handler) getPersonalVaultDocument(
 	)
 }
 
-func (h *Handler) previewPersonalVaultDocument(	w http.ResponseWriter,
+func (h *Handler) previewPersonalVaultDocument(
+	w http.ResponseWriter,
 	r *http.Request,
 ) {
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok || claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		http.Error(
+			w,
+			"unauthorized",
+			http.StatusUnauthorized,
+		)
 		return
 	}
 
 	if claims.Role != "student" {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(
+			w,
+			"forbidden",
+			http.StatusForbidden,
+		)
 		return
 	}
 
@@ -221,14 +230,25 @@ func (h *Handler) previewPersonalVaultDocument(	w http.ResponseWriter,
 		suffix,
 	)
 
-	documentID, err := strconv.ParseInt(documentIDText, 10, 64)
+	documentID, err := strconv.ParseInt(
+		documentIDText,
+		10,
+		64,
+	)
 	if err != nil || documentID <= 0 {
-		http.Error(w, "invalid document ID", http.StatusBadRequest)
+		http.Error(
+			w,
+			"invalid document ID",
+			http.StatusBadRequest,
+		)
 		return
 	}
 
 	file, document, err := h.service.PreviewPersonalVaultDocument(
-		r.Context(), claims.CollegeID, claims.UserID, documentID,
+		r.Context(),
+		claims.CollegeID,
+		claims.UserID,
+		documentID,
 	)
 	if err != nil {
 		writeDocumentServiceError(w, err)
@@ -236,10 +256,25 @@ func (h *Handler) previewPersonalVaultDocument(	w http.ResponseWriter,
 	}
 	defer file.Close()
 
-	w.Header().Set("Content-Type", document.MIMEType)
-	w.Header().Set("Content-Length", strconv.FormatInt(document.FileSizeBytes, 10))
-	w.Header().Set("Content-Disposition", "inline; filename=\""+strings.ReplaceAll(document.OriginalFilename, "\"", "")+"\"")
+	w.Header().Set(
+		"Content-Type",
+		document.MIMEType,
+	)
+
+	w.Header().Set(
+		"Content-Length",
+		strconv.FormatInt(document.FileSizeBytes, 10),
+	)
+
+	w.Header().Set(
+		"Content-Disposition",
+		"inline; filename=\""+
+			strings.ReplaceAll(document.OriginalFilename, "\"", "")+
+			"\"",
+	)
+
 	w.WriteHeader(http.StatusOK)
+
 	_, _ = io.Copy(w, file)
 }
 
