@@ -39,10 +39,20 @@ type UploadService interface {
 	) (UploadedDocument, error)
 }
 
+type PreviewService interface {
+	PreviewPersonalVaultDocument(
+		ctx context.Context,
+		collegeID int64,
+		studentID int64,
+		documentID int64,
+	) (io.ReadCloser, Document, error)
+}
+
 type ServiceInterface interface {
 	ListService
 	GetService
 	UploadService
+	PreviewService
 }
 
 type Handler struct {
@@ -63,6 +73,11 @@ func (h *Handler) ServeHTTP(
 	case r.Method == http.MethodGet &&
 		r.URL.Path == "/documents":
 		h.listPersonalVault(w, r)
+
+	case r.Method == http.MethodGet &&
+		strings.HasPrefix(r.URL.Path, "/documents/") &&
+		strings.HasSuffix(r.URL.Path, "/preview"):
+		h.previewPersonalVaultDocument(w, r)
 
 	case r.Method == http.MethodGet &&
 		strings.HasPrefix(r.URL.Path, "/documents/"):
@@ -182,6 +197,50 @@ func (h *Handler) getPersonalVaultDocument(
 		http.StatusOK,
 		document,
 	)
+}
+
+func (h *Handler) previewPersonalVaultDocument(	w http.ResponseWriter,
+	r *http.Request,
+) {
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if claims.Role != "student" {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	const prefix = "/documents/"
+	const suffix = "/preview"
+
+	documentIDText := strings.TrimSuffix(
+		strings.TrimPrefix(r.URL.Path, prefix),
+		suffix,
+	)
+
+	documentID, err := strconv.ParseInt(documentIDText, 10, 64)
+	if err != nil || documentID <= 0 {
+		http.Error(w, "invalid document ID", http.StatusBadRequest)
+		return
+	}
+
+	file, document, err := h.service.PreviewPersonalVaultDocument(
+		r.Context(), claims.CollegeID, claims.UserID, documentID,
+	)
+	if err != nil {
+		writeDocumentServiceError(w, err)
+		return
+	}
+	defer file.Close()
+
+	w.Header().Set("Content-Type", document.MIMEType)
+	w.Header().Set("Content-Length", strconv.FormatInt(document.FileSizeBytes, 10))
+	w.Header().Set("Content-Disposition", "inline; filename=\""+strings.ReplaceAll(document.OriginalFilename, "\"", "")+"\"")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, file)
 }
 
 func (h *Handler) uploadPersonalVaultDocument(
