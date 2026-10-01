@@ -1,8 +1,10 @@
 package documents
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -228,9 +230,14 @@ type mockStorage struct {
 		key string,
 	) error
 
+	openFunc func(
+		key string,
+	) (io.ReadCloser, error)
+
 	savedKey   string
 	savedData  []byte
 	deletedKey string
+	openedKey  string
 }
 
 func (m *mockStorage) Save(
@@ -260,6 +267,18 @@ func (m *mockStorage) Delete(
 	}
 
 	return nil
+}
+
+func (m *mockStorage) Open(
+	key string,
+) (io.ReadCloser, error) {
+	m.openedKey = key
+
+	if m.openFunc != nil {
+		return m.openFunc(key)
+	}
+
+	return io.NopCloser(bytes.NewReader(nil)), nil
 }
 
 func TestListPersonalVaultSuccess(t *testing.T) {
@@ -1314,4 +1333,77 @@ func TestCreatePersonalVaultDocumentInvalidInput(
 			}
 		})
 	}
+}
+
+func TestPreviewPersonalVaultDocumentSuccess(t *testing.T) {
+	t.Parallel()
+
+	uploadedAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	storage := &mockStorage{openFunc: func(key string) (io.ReadCloser, error) {
+		if key != "documents/student/certificate.pdf" { t.Errorf("unexpected storage key: %s", key) }
+		return io.NopCloser(bytes.NewReader([]byte("certificate contents"))), nil
+	}}
+
+	db := &mockDB{queryRowFunc: func(ctx context.Context, sql string, args ...any) pgx.Row {
+		if len(args) != 3 || args[0] != int64(100) || args[1] != int64(7) || args[2] != int64(42) { t.Fatalf("unexpected query arguments: %#v", args) }
+		return &mockRow{values: []any{int64(100), "certificate.pdf", "application/pdf", int64(19), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", uploadedAt, "documents/student/certificate.pdf"}}
+	}}
+
+	service := NewServiceWithStorage(db, storage)
+	file, document, err := service.PreviewPersonalVaultDocument(context.Background(), 7, 42, 100)
+	if err != nil { t.Fatalf("unexpected error: %v", err) }
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil { t.Fatalf("read preview: %v", err) }
+	if string(data) != "certificate contents" { t.Fatalf("unexpected preview contents: %q", string(data)) }
+	if document.ID != 100 || document.OriginalFilename != "certificate.pdf" || document.MIMEType != "application/pdf" || document.FileSizeBytes != 19 { t.Fatalf("unexpected document: %#v", document) }
+	if storage.openedKey != "documents/student/certificate.pdf" { t.Fatalf("unexpected opened storage key: %s", storage.openedKey) }
+}
+
+func TestPreviewPersonalVaultDocumentInvalidInput(t *testing.T) {
+	 t.Parallel()
+	 service := NewServiceWithStorage(&mockDB{}, &mockStorage{})
+	for _, test := range []struct{name string; collegeID, studentID, documentID int64}{
+		{"zero college",0,42,100},{"zero student",7,0,100},{"zero document",7,42,0},
+		{"negative college",-1,42,100},{"negative student",7,-1,100},{"negative document",7,42,-1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, _, err := service.PreviewPersonalVaultDocument(context.Background(), test.collegeID, test.studentID, test.documentID)
+			if file != nil { file.Close(); t.Fatal("expected nil file") }
+			if !errors.Is(err, ErrInvalidInput) { t.Fatalf("expected ErrInvalidInput, got %v", err) }
+		})
+	}
+}
+
+func TestPreviewPersonalVaultDocumentStorageNotConfigured(t *testing.T) {
+	 t.Parallel()
+	 service := NewService(&mockDB{})
+	 file, _, err := service.PreviewPersonalVaultDocument(context.Background(),7,42,100)
+	 if file != nil { file.Close(); t.Fatal("expected nil file") }
+	 if err == nil || err.Error() != "document storage is not configured" { t.Fatalf("unexpected error: %v", err) }
+}
+
+func TestPreviewPersonalVaultDocumentNotFound(t *testing.T) {
+	 t.Parallel()
+	 service := NewServiceWithStorage(&mockDB{queryRowFunc: func(ctx context.Context, sql string, args ...any) pgx.Row { return &mockRow{err: pgx.ErrNoRows} }}, &mockStorage{})
+	 file, _, err := service.PreviewPersonalVaultDocument(context.Background(),7,42,100)
+	 if file != nil { file.Close(); t.Fatal("expected nil file") }
+	 if !errors.Is(err, ErrDocumentNotFound) { t.Fatalf("expected ErrDocumentNotFound, got %v", err) }
+}
+
+func TestPreviewPersonalVaultDocumentStorageNotFound(t *testing.T) {
+	 t.Parallel()
+	 service := NewServiceWithStorage(&mockDB{queryRowFunc: func(ctx context.Context, sql string, args ...any) pgx.Row { return &mockRow{values: []any{int64(100),"certificate.pdf","application/pdf",int64(10),"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",time.Now(),"documents/missing.pdf"}} }}, &mockStorage{openFunc: func(key string) (io.ReadCloser,error) { return nil, ErrStorageNotFound }})
+	 file, _, err := service.PreviewPersonalVaultDocument(context.Background(),7,42,100)
+	 if file != nil { file.Close(); t.Fatal("expected nil file") }
+	 if !errors.Is(err, ErrDocumentNotFound) { t.Fatalf("expected ErrDocumentNotFound, got %v", err) }
+}
+
+func TestPreviewPersonalVaultDocumentStorageError(t *testing.T) {
+	 t.Parallel()
+	 expectedErr := errors.New("storage failure")
+	 service := NewServiceWithStorage(&mockDB{queryRowFunc: func(ctx context.Context, sql string, args ...any) pgx.Row { return &mockRow{values: []any{int64(100),"certificate.pdf","application/pdf",int64(10),"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",time.Now(),"documents/certificate.pdf"}} }}, &mockStorage{openFunc: func(key string) (io.ReadCloser,error) { return nil, expectedErr }})
+	 file, _, err := service.PreviewPersonalVaultDocument(context.Background(),7,42,100)
+	 if file != nil { file.Close(); t.Fatal("expected nil file") }
+	 if !errors.Is(err, expectedErr) { t.Fatalf("expected storage error, got %v", err) }
 }
