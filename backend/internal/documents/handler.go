@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"docproject/backend/internal/auth"
@@ -17,6 +18,15 @@ type ListService interface {
 		collegeID int64,
 		studentID int64,
 	) ([]Document, error)
+}
+
+type GetService interface {
+	GetPersonalVaultDocument(
+		ctx context.Context,
+		collegeID int64,
+		studentID int64,
+		documentID int64,
+	) (Document, error)
 }
 
 type UploadService interface {
@@ -31,6 +41,7 @@ type UploadService interface {
 
 type ServiceInterface interface {
 	ListService
+	GetService
 	UploadService
 }
 
@@ -44,12 +55,21 @@ func NewHandler(service ServiceInterface) *Handler {
 	}
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
+func (h *Handler) ServeHTTP(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	switch {
+	case r.Method == http.MethodGet &&
+		r.URL.Path == "/documents":
 		h.listPersonalVault(w, r)
 
-	case http.MethodPost:
+	case r.Method == http.MethodGet &&
+		strings.HasPrefix(r.URL.Path, "/documents/"):
+		h.getPersonalVaultDocument(w, r)
+
+	case r.Method == http.MethodPost &&
+		r.URL.Path == "/documents":
 		h.uploadPersonalVaultDocument(w, r)
 
 	default:
@@ -100,6 +120,68 @@ func (h *Handler) listPersonalVault(
 	}
 
 	writeJSON(w, http.StatusOK, documents)
+}
+
+func (h *Handler) getPersonalVaultDocument(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		http.Error(
+			w,
+			"unauthorized",
+			http.StatusUnauthorized,
+		)
+		return
+	}
+
+	if claims.Role != "student" {
+		http.Error(
+			w,
+			"forbidden",
+			http.StatusForbidden,
+		)
+		return
+	}
+
+	const prefix = "/documents/"
+
+	documentIDText := strings.TrimPrefix(
+		r.URL.Path,
+		prefix,
+	)
+
+	documentID, err := strconv.ParseInt(
+		documentIDText,
+		10,
+		64,
+	)
+	if err != nil || documentID <= 0 {
+		http.Error(
+			w,
+			"invalid document ID",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	document, err := h.service.GetPersonalVaultDocument(
+		r.Context(),
+		claims.CollegeID,
+		claims.UserID,
+		documentID,
+	)
+	if err != nil {
+		writeDocumentServiceError(w, err)
+		return
+	}
+
+	writeJSON(
+		w,
+		http.StatusOK,
+		document,
+	)
 }
 
 func (h *Handler) uploadPersonalVaultDocument(
@@ -265,6 +347,13 @@ func writeDocumentServiceError(
 			w,
 			"invalid DOCX file",
 			http.StatusBadRequest,
+		)
+
+	case errors.Is(err, ErrDocumentNotFound):
+		http.Error(
+			w,
+			"document not found",
+			http.StatusNotFound,
 		)
 
 	case errors.Is(err, ErrForbidden):

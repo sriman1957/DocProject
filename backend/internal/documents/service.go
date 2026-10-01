@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	ErrInvalidInput = errors.New("invalid document input")
-	ErrForbidden    = errors.New("forbidden")
+	ErrInvalidInput     = errors.New("invalid document input")
+	ErrForbidden        = errors.New("forbidden")
+	ErrDocumentNotFound = errors.New("document not found")
 )
 
 type Querier interface {
@@ -137,6 +138,65 @@ func (s *Service) ListPersonalVault(
 	}
 
 	return documents, nil
+}
+
+func (s *Service) GetPersonalVaultDocument(
+	ctx context.Context,
+	collegeID int64,
+	studentID int64,
+	documentID int64,
+) (Document, error) {
+	if collegeID <= 0 ||
+		studentID <= 0 ||
+		documentID <= 0 {
+		return Document{}, ErrInvalidInput
+	}
+
+	const query = `
+		SELECT
+			id,
+			original_filename,
+			mime_type,
+			file_size_bytes,
+			sha256,
+			uploaded_at
+		FROM documents
+		WHERE id = $1
+		  AND college_id = $2
+		  AND owner_id = $3
+		  AND subgroup_id IS NULL
+		  AND deleted_at IS NULL
+	`
+
+	var document Document
+
+	err := s.db.QueryRow(
+		ctx,
+		query,
+		documentID,
+		collegeID,
+		studentID,
+	).Scan(
+		&document.ID,
+		&document.OriginalFilename,
+		&document.MIMEType,
+		&document.FileSizeBytes,
+		&document.SHA256,
+		&document.UploadedAt,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Document{}, ErrDocumentNotFound
+		}
+
+		return Document{}, fmt.Errorf(
+			"get personal vault document: query document: %w",
+			err,
+		)
+	}
+
+	return document, nil
 }
 
 func (s *Service) CreatePersonalVaultDocument(

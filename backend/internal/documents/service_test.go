@@ -3,6 +3,7 @@ package documents
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -382,6 +383,365 @@ func TestListPersonalVaultSuccess(t *testing.T) {
 	}
 }
 
+func TestServiceGetPersonalVaultDocumentSuccess(t *testing.T) {
+	now := time.Date(
+		2026,
+		9,
+		30,
+		12,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+
+	db := &mockDB{
+		queryRowFunc: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			return &mockRow{
+				values: []any{
+					int64(10),
+					"certificate.pdf",
+					"application/pdf",
+					int64(1024),
+					"abc123",
+					now,
+				},
+			}
+		},
+	}
+
+	service := NewService(db)
+
+	document, err := service.GetPersonalVaultDocument(
+		context.Background(),
+		1,
+		2,
+		10,
+	)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if document.ID != 10 {
+		t.Fatalf("expected document ID 10, got %d", document.ID)
+	}
+
+	if document.OriginalFilename != "certificate.pdf" {
+		t.Fatalf(
+			"expected filename certificate.pdf, got %q",
+			document.OriginalFilename,
+		)
+	}
+
+	if document.MIMEType != "application/pdf" {
+		t.Fatalf(
+			"expected MIME type application/pdf, got %q",
+			document.MIMEType,
+		)
+	}
+
+	if document.FileSizeBytes != 1024 {
+		t.Fatalf(
+			"expected file size 1024, got %d",
+			document.FileSizeBytes,
+		)
+	}
+
+	if document.SHA256 != "abc123" {
+		t.Fatalf(
+			"expected SHA256 abc123, got %q",
+			document.SHA256,
+		)
+	}
+
+	if !document.UploadedAt.Equal(now) {
+		t.Fatalf(
+			"expected uploaded time %v, got %v",
+			now,
+			document.UploadedAt,
+		)
+	}
+}
+
+func TestServiceGetPersonalVaultDocumentInvalidInput(t *testing.T) {
+	service := NewService(&mockDB{})
+
+	testCases := []struct {
+		name       string
+		collegeID  int64
+		studentID  int64
+		documentID int64
+	}{
+		{
+			name:       "invalid college ID",
+			collegeID:  0,
+			studentID:  2,
+			documentID: 10,
+		},
+		{
+			name:       "invalid student ID",
+			collegeID:  1,
+			studentID:  0,
+			documentID: 10,
+		},
+		{
+			name:       "invalid document ID",
+			collegeID:  1,
+			studentID:  2,
+			documentID: 0,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := service.GetPersonalVaultDocument(
+				context.Background(),
+				tc.collegeID,
+				tc.studentID,
+				tc.documentID,
+			)
+
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf(
+					"expected ErrInvalidInput, got %v",
+					err,
+				)
+			}
+		})
+	}
+}
+
+func TestServiceGetPersonalVaultDocument(t *testing.T) {
+	t.Parallel()
+
+	uploadedAt := time.Date(
+		2026,
+		9,
+		30,
+		12,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+
+	rows := &mockRow{
+		values: []any{
+			int64(42),
+			"certificate.pdf",
+			"application/pdf",
+			int64(1024),
+			"abc123",
+			uploadedAt,
+		},
+	}
+
+	db := &mockDB{
+		queryRowFunc: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			if len(args) != 3 {
+				t.Fatalf(
+					"expected 3 query arguments, got %d",
+					len(args),
+				)
+			}
+
+			if args[0] != int64(42) {
+				t.Fatalf(
+					"expected document ID 42, got %v",
+					args[0],
+				)
+			}
+
+			if args[1] != int64(1) {
+				t.Fatalf(
+					"expected college ID 1, got %v",
+					args[1],
+				)
+			}
+
+			if args[2] != int64(7) {
+				t.Fatalf(
+					"expected student ID 7, got %v",
+					args[2],
+				)
+			}
+
+			if !strings.Contains(
+				sql,
+				"AND college_id = $2",
+			) {
+				t.Fatal(
+					"expected query to enforce college isolation",
+				)
+			}
+
+			if !strings.Contains(
+				sql,
+				"AND owner_id = $3",
+			) {
+				t.Fatal(
+					"expected query to enforce document ownership",
+				)
+			}
+
+			if !strings.Contains(
+				sql,
+				"AND subgroup_id IS NULL",
+			) {
+				t.Fatal(
+					"expected query to restrict documents to personal vault",
+				)
+			}
+
+			if !strings.Contains(
+				sql,
+				"AND deleted_at IS NULL",
+			) {
+				t.Fatal(
+					"expected query to exclude deleted documents",
+				)
+			}
+
+			return rows
+		},
+	}
+
+	service := NewService(db)
+
+	document, err := service.GetPersonalVaultDocument(
+		context.Background(),
+		1,
+		7,
+		42,
+	)
+	if err != nil {
+		t.Fatalf(
+			"expected no error, got %v",
+			err,
+		)
+	}
+
+	if document.ID != 42 {
+		t.Fatalf(
+			"expected document ID 42, got %d",
+			document.ID,
+		)
+	}
+
+	if document.OriginalFilename != "certificate.pdf" {
+		t.Fatalf(
+			"expected filename certificate.pdf, got %q",
+			document.OriginalFilename,
+		)
+	}
+
+	if document.MIMEType != "application/pdf" {
+		t.Fatalf(
+			"expected MIME type application/pdf, got %q",
+			document.MIMEType,
+		)
+	}
+
+	if document.FileSizeBytes != 1024 {
+		t.Fatalf(
+			"expected file size 1024, got %d",
+			document.FileSizeBytes,
+		)
+	}
+
+	if document.SHA256 != "abc123" {
+		t.Fatalf(
+			"expected SHA256 abc123, got %q",
+			document.SHA256,
+		)
+	}
+
+	if !document.UploadedAt.Equal(uploadedAt) {
+		t.Fatalf(
+			"expected uploaded_at %v, got %v",
+			uploadedAt,
+			document.UploadedAt,
+		)
+	}
+}
+
+func TestServiceGetPersonalVaultDocumentNotFound(t *testing.T) {
+	db := &mockDB{
+		queryRowFunc: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			return &mockRow{
+				err: pgx.ErrNoRows,
+			}
+		},
+	}
+
+	service := NewService(db)
+
+	_, err := service.GetPersonalVaultDocument(
+		context.Background(),
+		1,
+		2,
+		10,
+	)
+
+	if !errors.Is(err, ErrDocumentNotFound) {
+		t.Fatalf(
+			"expected ErrDocumentNotFound, got %v",
+			err,
+		)
+	}
+}
+
+func TestServiceGetPersonalVaultDocumentQueryError(t *testing.T) {
+	t.Parallel()
+
+	expectedErr := errors.New(
+		"database query failed",
+	)
+
+	db := &mockDB{
+		queryRowFunc: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			return &mockRow{
+				err: expectedErr,
+			}
+		},
+	}
+
+	service := NewService(db)
+
+	_, err := service.GetPersonalVaultDocument(
+		context.Background(),
+		1,
+		2,
+		10,
+	)
+
+	if err == nil {
+		t.Fatal("expected database error, got nil")
+	}
+
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf(
+			"expected wrapped database error, got %v",
+			err,
+		)
+	}
+}
 func TestListPersonalVaultEmpty(t *testing.T) {
 	t.Parallel()
 

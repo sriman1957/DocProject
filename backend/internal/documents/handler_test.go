@@ -22,6 +22,13 @@ type handlerTestService struct {
 		studentID int64,
 	) ([]Document, error)
 
+	getFn func(
+		ctx context.Context,
+		collegeID int64,
+		studentID int64,
+		documentID int64,
+	) (Document, error)
+
 	uploadFn func(
 		ctx context.Context,
 		collegeID int64,
@@ -46,6 +53,26 @@ func (s *handlerTestService) ListPersonalVault(
 		ctx,
 		collegeID,
 		studentID,
+	)
+}
+
+func (s *handlerTestService) GetPersonalVaultDocument(
+	ctx context.Context,
+	collegeID int64,
+	studentID int64,
+	documentID int64,
+) (Document, error) {
+	if s.getFn == nil {
+		return Document{}, errors.New(
+			"get function not configured",
+		)
+	}
+
+	return s.getFn(
+		ctx,
+		collegeID,
+		studentID,
+		documentID,
 	)
 }
 
@@ -252,6 +279,13 @@ func TestListPersonalVaultHandlerSuccess(t *testing.T) {
 			"expected status 200, got %d. Body: %s",
 			recorder.Code,
 			recorder.Body.String(),
+		)
+	}
+
+	if recorder.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf(
+			"expected JSON content type, got %q",
+			recorder.Header().Get("Content-Type"),
 		)
 	}
 
@@ -597,6 +631,435 @@ func TestListPersonalVaultHandlerMethodNotAllowed(t *testing.T) {
 	}
 }
 
+func TestGetPersonalVaultDocumentHandlerSuccess(t *testing.T) {
+	t.Parallel()
+
+	uploadedAt := time.Date(
+		2026,
+		9,
+		30,
+		12,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+
+	service := &handlerTestService{
+		getFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (Document, error) {
+			if collegeID != 7 {
+				t.Errorf(
+					"expected college ID 7, got %d",
+					collegeID,
+				)
+			}
+
+			if studentID != 42 {
+				t.Errorf(
+					"expected student ID 42, got %d",
+					studentID,
+				)
+			}
+
+			if documentID != 100 {
+				t.Errorf(
+					"expected document ID 100, got %d",
+					documentID,
+				)
+			}
+
+			return Document{
+				ID:               100,
+				OriginalFilename: "certificate.pdf",
+				MIMEType:         "application/pdf",
+				FileSizeBytes:    1024,
+				SHA256:           "abc123",
+				UploadedAt:       uploadedAt,
+			}, nil
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeDocumentAuthenticatedRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/documents/100",
+		"student",
+	)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status 200, got %d. Body: %s",
+			recorder.Code,
+			recorder.Body.String(),
+		)
+	}
+
+	if recorder.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf(
+			"expected JSON content type, got %q",
+			recorder.Header().Get("Content-Type"),
+		)
+	}
+
+	var response Document
+
+	if err := json.NewDecoder(
+		recorder.Body,
+	).Decode(&response); err != nil {
+		t.Fatalf(
+			"decode response: %v",
+			err,
+		)
+	}
+
+	if response.ID != 100 {
+		t.Errorf(
+			"expected document ID 100, got %d",
+			response.ID,
+		)
+	}
+
+	if response.OriginalFilename != "certificate.pdf" {
+		t.Errorf(
+			"expected filename certificate.pdf, got %s",
+			response.OriginalFilename,
+		)
+	}
+
+	if response.MIMEType != "application/pdf" {
+		t.Errorf(
+			"expected MIME type application/pdf, got %s",
+			response.MIMEType,
+		)
+	}
+
+	if response.FileSizeBytes != 1024 {
+		t.Errorf(
+			"expected file size 1024, got %d",
+			response.FileSizeBytes,
+		)
+	}
+
+	if response.SHA256 != "abc123" {
+		t.Errorf(
+			"expected SHA256 abc123, got %s",
+			response.SHA256,
+		)
+	}
+
+	if !response.UploadedAt.Equal(uploadedAt) {
+		t.Errorf(
+			"unexpected uploaded_at: %s",
+			response.UploadedAt,
+		)
+	}
+}
+
+func TestGetPersonalVaultDocumentHandlerUnauthorized(t *testing.T) {
+	t.Parallel()
+
+	service := &handlerTestService{
+		getFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (Document, error) {
+			t.Fatal("service should not be called")
+			return Document{}, nil
+		},
+	}
+
+	handler := NewHandler(service)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/documents/100",
+		nil,
+	)
+
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf(
+			"expected status 401, got %d",
+			recorder.Code,
+		)
+	}
+}
+
+func TestGetPersonalVaultDocumentHandlerFacultyForbidden(t *testing.T) {
+	t.Parallel()
+
+	service := &handlerTestService{
+		getFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (Document, error) {
+			t.Fatal("service should not be called")
+			return Document{}, nil
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeDocumentAuthenticatedRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/documents/100",
+		"faculty",
+	)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf(
+			"expected status 403, got %d",
+			recorder.Code,
+		)
+	}
+}
+
+func TestGetPersonalVaultDocumentHandlerCollegeAdminForbidden(t *testing.T) {
+	t.Parallel()
+
+	service := &handlerTestService{
+		getFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (Document, error) {
+			t.Fatal("service should not be called")
+			return Document{}, nil
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeDocumentAuthenticatedRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/documents/100",
+		"college_admin",
+	)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf(
+			"expected status 403, got %d",
+			recorder.Code,
+		)
+	}
+}
+
+func TestGetPersonalVaultDocumentHandlerInvalidID(t *testing.T) {
+	t.Parallel()
+
+	service := &handlerTestService{
+		getFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (Document, error) {
+			t.Fatal("service should not be called")
+			return Document{}, nil
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeDocumentAuthenticatedRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/documents/not-a-number",
+		"student",
+	)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status 400, got %d",
+			recorder.Code,
+		)
+	}
+}
+
+func TestGetPersonalVaultDocumentHandlerZeroID(t *testing.T) {
+	t.Parallel()
+
+	service := &handlerTestService{
+		getFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (Document, error) {
+			t.Fatal("service should not be called")
+			return Document{}, nil
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeDocumentAuthenticatedRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/documents/0",
+		"student",
+	)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status 400, got %d",
+			recorder.Code,
+		)
+	}
+}
+
+func TestGetPersonalVaultDocumentHandlerNotFound(t *testing.T) {
+	t.Parallel()
+
+	service := &handlerTestService{
+		getFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (Document, error) {
+			return Document{}, ErrDocumentNotFound
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeDocumentAuthenticatedRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/documents/100",
+		"student",
+	)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf(
+			"expected status 404, got %d",
+			recorder.Code,
+		)
+	}
+}
+
+func TestGetPersonalVaultDocumentHandlerInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	service := &handlerTestService{
+		getFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (Document, error) {
+			return Document{}, ErrInvalidInput
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeDocumentAuthenticatedRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/documents/100",
+		"student",
+	)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status 400, got %d",
+			recorder.Code,
+		)
+	}
+}
+
+func TestGetPersonalVaultDocumentHandlerForbidden(t *testing.T) {
+	t.Parallel()
+
+	service := &handlerTestService{
+		getFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (Document, error) {
+			return Document{}, ErrForbidden
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeDocumentAuthenticatedRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/documents/100",
+		"student",
+	)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf(
+			"expected status 403, got %d",
+			recorder.Code,
+		)
+	}
+}
+
+func TestGetPersonalVaultDocumentHandlerServiceError(t *testing.T) {
+	t.Parallel()
+
+	expectedErr := errors.New("database failure")
+
+	service := &handlerTestService{
+		getFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (Document, error) {
+			return Document{}, expectedErr
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeDocumentAuthenticatedRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/documents/100",
+		"student",
+	)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf(
+			"expected status 500, got %d",
+			recorder.Code,
+		)
+	}
+}
+
 func TestUploadPersonalVaultDocumentHandlerSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -813,7 +1276,9 @@ func TestUploadPersonalVaultDocumentHandlerFacultyForbidden(t *testing.T) {
 	}
 }
 
-func TestUploadPersonalVaultDocumentHandlerCollegeAdminForbidden(t *testing.T) {
+func TestUploadPersonalVaultDocumentHandlerCollegeAdminForbidden(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	service := &handlerTestService{
@@ -856,7 +1321,10 @@ func TestUploadPersonalVaultDocumentHandlerMissingFile(t *testing.T) {
 	writer := multipart.NewWriter(&body)
 
 	if err := writer.Close(); err != nil {
-		t.Fatalf("close multipart writer: %v", err)
+		t.Fatalf(
+			"close multipart writer: %v",
+			err,
+		)
 	}
 
 	tokens := newDocumentTestTokenService()
@@ -917,7 +1385,9 @@ func TestUploadPersonalVaultDocumentHandlerMissingFile(t *testing.T) {
 	}
 }
 
-func TestUploadPersonalVaultDocumentHandlerWrongContentType(t *testing.T) {
+func TestUploadPersonalVaultDocumentHandlerWrongContentType(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	service := &handlerTestService{
@@ -951,7 +1421,9 @@ func TestUploadPersonalVaultDocumentHandlerWrongContentType(t *testing.T) {
 	}
 }
 
-func TestUploadPersonalVaultDocumentHandlerOversized(t *testing.T) {
+func TestUploadPersonalVaultDocumentHandlerOversized(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	service := &handlerTestService{
