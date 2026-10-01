@@ -16,6 +16,7 @@ var (
 type Storage interface {
 	Save(key string, data []byte) error
 	Delete(key string) error
+	Open(key string) (io.ReadCloser, error)
 }
 
 type FileStorage struct {
