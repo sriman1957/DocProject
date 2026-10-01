@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -197,6 +198,85 @@ func (s *Service) GetPersonalVaultDocument(
 	}
 
 	return document, nil
+}
+
+func (s *Service) PreviewPersonalVaultDocument(
+	ctx context.Context,
+	collegeID int64,
+	studentID int64,
+	documentID int64,
+) (io.ReadCloser, Document, error) {
+	if collegeID <= 0 ||
+		studentID <= 0 ||
+		documentID <= 0 {
+		return nil, Document{}, ErrInvalidInput
+	}
+
+	if s.storage == nil {
+		return nil, Document{}, errors.New(
+			"document storage is not configured",
+		)
+	}
+
+	const query = `
+		SELECT
+			id,
+			original_filename,
+			mime_type,
+			file_size_bytes,
+			sha256,
+			uploaded_at,
+			storage_key
+		FROM documents
+		WHERE id = $1
+		  AND college_id = $2
+		  AND owner_id = $3
+		  AND subgroup_id IS NULL
+		  AND deleted_at IS NULL
+	`
+
+	var document Document
+	var storageKey string
+
+	err := s.db.QueryRow(
+		ctx,
+		query,
+		documentID,
+		collegeID,
+		studentID,
+	).Scan(
+		&document.ID,
+		&document.OriginalFilename,
+		&document.MIMEType,
+		&document.FileSizeBytes,
+		&document.SHA256,
+		&document.UploadedAt,
+		&storageKey,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, Document{}, ErrDocumentNotFound
+		}
+
+		return nil, Document{}, fmt.Errorf(
+			"preview personal vault document: query document: %w",
+			err,
+		)
+	}
+
+	file, err := s.storage.Open(storageKey)
+	if err != nil {
+		if errors.Is(err, ErrStorageNotFound) {
+			return nil, Document{}, ErrDocumentNotFound
+		}
+
+		return nil, Document{}, fmt.Errorf(
+			"preview personal vault document: open storage object: %w",
+			err,
+		)
+	}
+
+	return file, document, nil
 }
 
 func (s *Service) CreatePersonalVaultDocument(
