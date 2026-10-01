@@ -16,11 +16,11 @@ import (
 	"docproject/backend/internal/accessperiods"
 	"docproject/backend/internal/auth"
 	"docproject/backend/internal/config"
+	"docproject/backend/internal/documents"
 	"docproject/backend/internal/groups"
 	"docproject/backend/internal/subgroupassignments"
 	"docproject/backend/internal/subgroups"
 	"docproject/backend/internal/users"
-	"docproject/backend/internal/documents"
 )
 
 func main() {
@@ -142,12 +142,26 @@ func run() error {
 		protectedAccessPeriodsHandler,
 	)
 
-	documentsService := documents.NewService(database)
+	documentsStorage, err := documents.NewFileStorage(
+		"storage/documents",
+	)
+	if err != nil {
+		return err
+	}
+
+	documentsService := documents.NewServiceWithStorage(
+		database,
+		documentsStorage,
+	)
+
 	documentsHandler := documents.NewHandler(documentsService)
 
 	mux.Handle(
 		"/documents",
-		auth.AuthMiddleware(tokenService, documentsHandler),
+		auth.AuthMiddleware(
+			tokenService,
+			documentsHandler,
+		),
 	)
 
 	// Subgroup faculty assignment routes
@@ -175,7 +189,6 @@ func run() error {
 		"DELETE /groups/{group_id}/subgroups/{subgroup_id}/faculty/{faculty_id}",
 		protectedSubgroupAssignmentsHandler,
 	)
-
 
 	// Health routes
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, r *http.Request) {

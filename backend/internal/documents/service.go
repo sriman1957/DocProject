@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -15,18 +16,50 @@ var (
 )
 
 type Querier interface {
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Query(
+		ctx context.Context,
+		sql string,
+		args ...any,
+	) (pgx.Rows, error)
+
+	QueryRow(
+		ctx context.Context,
+		sql string,
+		args ...any,
+	) pgx.Row
 }
 
 type Service struct {
-	db Querier
+	db      Querier
+	storage Storage
 }
 
 func NewService(database Querier) *Service {
-	return &Service{db: database}
+	return &Service{
+		db: database,
+	}
+}
+
+func NewServiceWithStorage(
+	database Querier,
+	storage Storage,
+) *Service {
+	return &Service{
+		db:      database,
+		storage: storage,
+	}
 }
 
 type Document struct {
+	ID               int64     `json:"id"`
+	OriginalFilename string    `json:"original_filename"`
+	MIMEType         string    `json:"mime_type"`
+	FileSizeBytes    int64     `json:"file_size_bytes"`
+	SHA256           string    `json:"sha256"`
+	UploadedAt       time.Time `json:"uploaded_at"`
+}
+
+type UploadedDocument struct {
 	ID               int64     `json:"id"`
 	OriginalFilename string    `json:"original_filename"`
 	MIMEType         string    `json:"mime_type"`
@@ -60,7 +93,12 @@ func (s *Service) ListPersonalVault(
 		ORDER BY uploaded_at DESC, id DESC
 	`
 
-	rows, err := s.db.Query(ctx, query, collegeID, studentID)
+	rows, err := s.db.Query(
+		ctx,
+		query,
+		collegeID,
+		studentID,
+	)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"list personal vault documents: query documents: %w",
@@ -99,4 +137,140 @@ func (s *Service) ListPersonalVault(
 	}
 
 	return documents, nil
+}
+
+func (s *Service) CreatePersonalVaultDocument(
+	ctx context.Context,
+	collegeID int64,
+	studentID int64,
+	originalFilename string,
+	data []byte,
+) (UploadedDocument, error) {
+	if collegeID <= 0 || studentID <= 0 {
+		return UploadedDocument{}, ErrInvalidInput
+	}
+
+	if s.storage == nil {
+		return UploadedDocument{}, errors.New(
+			"document storage is not configured",
+		)
+	}
+
+	if strings.TrimSpace(originalFilename) == "" {
+		return UploadedDocument{}, ErrInvalidInput
+	}
+
+	upload, err := ValidateUpload(data)
+	if err != nil {
+		return UploadedDocument{}, err
+	}
+
+	sha256Hash := CalculateSHA256(data)
+	storageKey := GenerateStorageKey()
+
+	if err := s.storage.Save(
+		storageKey,
+		data,
+	); err != nil {
+		return UploadedDocument{}, fmt.Errorf(
+			"save document: %w",
+			err,
+		)
+	}
+
+	document, err := s.insertDocument(
+		ctx,
+		collegeID,
+		studentID,
+		originalFilename,
+		storageKey,
+		upload.MIMEType,
+		upload.Size,
+		sha256Hash,
+	)
+	if err != nil {
+		if deleteErr := s.storage.Delete(
+			storageKey,
+		); deleteErr != nil {
+			return UploadedDocument{}, fmt.Errorf(
+				"insert document: %w; cleanup stored file: %v",
+				err,
+				deleteErr,
+			)
+		}
+
+		return UploadedDocument{}, err
+	}
+
+	return document, nil
+}
+
+func (s *Service) insertDocument(
+	ctx context.Context,
+	collegeID int64,
+	studentID int64,
+	originalFilename string,
+	storageKey string,
+	mimeType string,
+	fileSize int64,
+	sha256Hash string,
+) (UploadedDocument, error) {
+	const query = `
+		INSERT INTO documents (
+			college_id,
+			owner_id,
+			subgroup_id,
+			original_filename,
+			storage_key,
+			mime_type,
+			file_size_bytes,
+			sha256
+		)
+		VALUES (
+			$1,
+			$2,
+			NULL,
+			$3,
+			$4,
+			$5,
+			$6,
+			$7
+		)
+		RETURNING
+			id,
+			original_filename,
+			mime_type,
+			file_size_bytes,
+			sha256,
+			uploaded_at
+	`
+
+	var document UploadedDocument
+
+	err := s.db.QueryRow(
+		ctx,
+		query,
+		collegeID,
+		studentID,
+		originalFilename,
+		storageKey,
+		mimeType,
+		fileSize,
+		sha256Hash,
+	).Scan(
+		&document.ID,
+		&document.OriginalFilename,
+		&document.MIMEType,
+		&document.FileSizeBytes,
+		&document.SHA256,
+		&document.UploadedAt,
+	)
+	if err != nil {
+		return UploadedDocument{}, fmt.Errorf(
+			"insert document: %w",
+			err,
+		)
+	}
+
+	return document, nil
 }
