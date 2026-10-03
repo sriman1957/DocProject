@@ -1767,67 +1767,288 @@ func TestPreviewPersonalVaultDocumentHandlerSuccess(t *testing.T) {
 
 	data := []byte("%PDF-1.7\ncertificate contents")
 
-	service := &handlerTestService{previewFn: func(ctx context.Context, collegeID int64, studentID int64, documentID int64) (io.ReadCloser, Document, error) {
-		if collegeID != 7 || studentID != 42 || documentID != 100 { t.Fatalf("unexpected identity: %d/%d/%d", collegeID, studentID, documentID) }
-		return io.NopCloser(bytes.NewReader(data)), Document{ID:100, OriginalFilename:"certificate.pdf", MIMEType:"application/pdf", FileSizeBytes:int64(len(data))}, nil
-	}}
+	service := &handlerTestService{
+		previewFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			if collegeID != 7 ||
+				studentID != 42 ||
+				documentID != 100 {
+				t.Fatalf(
+					"unexpected identity: %d/%d/%d",
+					collegeID,
+					studentID,
+					documentID,
+				)
+			}
+
+			return io.NopCloser(
+				bytes.NewReader(data),
+			), Document{
+				ID:               100,
+				OriginalFilename: "certificate.pdf",
+				MIMEType:         "application/pdf",
+				FileSizeBytes:    int64(len(data)),
+			}, nil
+		},
+	}
 
 	handler := NewHandler(service)
-	recorder := makeDocumentAuthenticatedRequest(t, handler, http.MethodGet, "/documents/100/preview", "student")
-	if recorder.Code != http.StatusOK { t.Fatalf("expected status 200, got %d. Body: %s", recorder.Code, recorder.Body.String()) }
-	if recorder.Header().Get("Content-Type") != "application/pdf" { t.Fatalf("unexpected Content-Type: %q", recorder.Header().Get("Content-Type")) }
-	if recorder.Header().Get("Content-Length") != strconv.Itoa(len(data)) { t.Fatalf("unexpected Content-Length: %q", recorder.Header().Get("Content-Length")) }
-	if recorder.Header().Get("Content-Disposition") != "inline; filename=\"certificate.pdf\"" { t.Fatalf("unexpected Content-Disposition: %q", recorder.Header().Get("Content-Disposition")) }
-	if !bytes.Equal(recorder.Body.Bytes(), data) { t.Fatal("preview response body does not match document") }
+
+	recorder := makeDocumentAuthenticatedRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/documents/100/preview",
+		"student",
+	)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status 200, got %d. Body: %s",
+			recorder.Code,
+			recorder.Body.String(),
+		)
+	}
+
+	if recorder.Header().Get("Content-Type") != "application/pdf" {
+		t.Fatalf(
+			"unexpected Content-Type: %q",
+			recorder.Header().Get("Content-Type"),
+		)
+	}
+
+	if recorder.Header().Get("Content-Length") != strconv.Itoa(len(data)) {
+		t.Fatalf(
+			"unexpected Content-Length: %q",
+			recorder.Header().Get("Content-Length"),
+		)
+	}
+
+	if recorder.Header().Get("Content-Disposition") !=
+		`inline; filename="certificate.pdf"` {
+		t.Fatalf(
+			"unexpected Content-Disposition: %q",
+			recorder.Header().Get("Content-Disposition"),
+		)
+	}
+
+	if !bytes.Equal(recorder.Body.Bytes(), data) {
+		t.Fatal("preview response body does not match document")
+	}
 }
 
-func TestPreviewPersonalVaultDocumentHandlerUnauthorized(t *testing.T) {
+func TestPreviewPersonalVaultDocumentHandlerUnauthorized(
+	t *testing.T,
+) {
 	t.Parallel()
-	service := &handlerTestService{previewFn: func(ctx context.Context, collegeID int64, studentID int64, documentID int64) (io.ReadCloser, Document, error) { t.Fatal("service should not be called"); return nil, Document{}, nil }}
+
+	service := &handlerTestService{
+		previewFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			t.Fatal("service should not be called")
+			return nil, Document{}, nil
+		},
+	}
+
 	handler := NewHandler(service)
-	req := httptest.NewRequest(http.MethodGet, "/documents/100/preview", nil)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/documents/100/preview",
+		nil,
+	)
+
 	recorder := httptest.NewRecorder()
+
 	handler.ServeHTTP(recorder, req)
-	if recorder.Code != http.StatusUnauthorized { t.Fatalf("expected status 401, got %d", recorder.Code) }
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf(
+			"expected status 401, got %d",
+			recorder.Code,
+		)
+	}
 }
 
-func TestPreviewPersonalVaultDocumentHandlerFacultyForbidden(t *testing.T) {
+func TestPreviewPersonalVaultDocumentHandlerFacultyForbidden(
+	t *testing.T,
+) {
 	t.Parallel()
-	service := &handlerTestService{previewFn: func(ctx context.Context, collegeID int64, studentID int64, documentID int64) (io.ReadCloser, Document, error) { t.Fatal("service should not be called"); return nil, Document{}, nil }}
+
+	service := &handlerTestService{
+		previewFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			t.Fatal("service should not be called")
+			return nil, Document{}, nil
+		},
+	}
+
 	handler := NewHandler(service)
-	recorder := makeDocumentAuthenticatedRequest(t, handler, http.MethodGet, "/documents/100/preview", "faculty")
-	if recorder.Code != http.StatusForbidden { t.Fatalf("expected status 403, got %d", recorder.Code) }
+
+	recorder := makeDocumentAuthenticatedRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/documents/100/preview",
+		"faculty",
+	)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf(
+			"expected status 403, got %d",
+			recorder.Code,
+		)
+	}
 }
 
-func TestPreviewPersonalVaultDocumentHandlerCollegeAdminForbidden(t *testing.T) {
+func TestPreviewPersonalVaultDocumentHandlerCollegeAdminForbidden(
+	t *testing.T,
+) {
 	t.Parallel()
-	service := &handlerTestService{previewFn: func(ctx context.Context, collegeID int64, studentID int64, documentID int64) (io.ReadCloser, Document, error) { t.Fatal("service should not be called"); return nil, Document{}, nil }}
+
+	service := &handlerTestService{
+		previewFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			t.Fatal("service should not be called")
+			return nil, Document{}, nil
+		},
+	}
+
 	handler := NewHandler(service)
-	recorder := makeDocumentAuthenticatedRequest(t, handler, http.MethodGet, "/documents/100/preview", "college_admin")
-	if recorder.Code != http.StatusForbidden { t.Fatalf("expected status 403, got %d", recorder.Code) }
+
+	recorder := makeDocumentAuthenticatedRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/documents/100/preview",
+		"college_admin",
+	)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf(
+			"expected status 403, got %d",
+			recorder.Code,
+		)
+	}
 }
 
-func TestPreviewPersonalVaultDocumentHandlerInvalidID(t *testing.T) {
+func TestPreviewPersonalVaultDocumentHandlerInvalidID(
+	t *testing.T,
+) {
 	t.Parallel()
-	service := &handlerTestService{previewFn: func(ctx context.Context, collegeID int64, studentID int64, documentID int64) (io.ReadCloser, Document, error) { t.Fatal("service should not be called"); return nil, Document{}, nil }}
+
+	service := &handlerTestService{
+		previewFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			t.Fatal("service should not be called")
+			return nil, Document{}, nil
+		},
+	}
+
 	handler := NewHandler(service)
-	recorder := makeDocumentAuthenticatedRequest(t, handler, http.MethodGet, "/documents/not-a-number/preview", "student")
-	if recorder.Code != http.StatusBadRequest { t.Fatalf("expected status 400, got %d", recorder.Code) }
+
+	recorder := makeDocumentAuthenticatedRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/documents/not-a-number/preview",
+		"student",
+	)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status 400, got %d",
+			recorder.Code,
+		)
+	}
 }
 
-func TestPreviewPersonalVaultDocumentHandlerNotFound(t *testing.T) {
+func TestPreviewPersonalVaultDocumentHandlerNotFound(
+	t *testing.T,
+) {
 	t.Parallel()
-	service := &handlerTestService{previewFn: func(ctx context.Context, collegeID int64, studentID int64, documentID int64) (io.ReadCloser, Document, error) { return nil, Document{}, ErrDocumentNotFound }}
+
+	service := &handlerTestService{
+		previewFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			return nil, Document{}, ErrDocumentNotFound
+		},
+	}
+
 	handler := NewHandler(service)
-	recorder := makeDocumentAuthenticatedRequest(t, handler, http.MethodGet, "/documents/100/preview", "student")
-	if recorder.Code != http.StatusNotFound { t.Fatalf("expected status 404, got %d", recorder.Code) }
+
+	recorder := makeDocumentAuthenticatedRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/documents/100/preview",
+		"student",
+	)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf(
+			"expected status 404, got %d",
+			recorder.Code,
+		)
+	}
 }
 
-func TestPreviewPersonalVaultDocumentHandlerServiceError(t *testing.T) {
+func TestPreviewPersonalVaultDocumentHandlerServiceError(
+	t *testing.T,
+) {
 	t.Parallel()
+
 	expectedErr := errors.New("preview failure")
-	service := &handlerTestService{previewFn: func(ctx context.Context, collegeID int64, studentID int64, documentID int64) (io.ReadCloser, Document, error) { return nil, Document{}, expectedErr }}
+
+	service := &handlerTestService{
+		previewFn: func(
+			ctx context.Context,
+			collegeID int64,
+			studentID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			return nil, Document{}, expectedErr
+		},
+	}
+
 	handler := NewHandler(service)
-	recorder := makeDocumentAuthenticatedRequest(t, handler, http.MethodGet, "/documents/100/preview", "student")
-	if recorder.Code != http.StatusInternalServerError { t.Fatalf("expected status 500, got %d", recorder.Code) }
+
+	recorder := makeDocumentAuthenticatedRequest(
+		t,
+		handler,
+		http.MethodGet,
+		"/documents/100/preview",
+		"student",
+	)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf(
+			"expected status 500, got %d",
+			recorder.Code,
+		)
+	}
 }

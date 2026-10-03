@@ -75,7 +75,6 @@ func (h *Handler) ServeHTTP(
 		h.listPersonalVault(w, r)
 
 	case r.Method == http.MethodGet &&
-		strings.HasPrefix(r.URL.Path, "/documents/") &&
 		strings.HasSuffix(r.URL.Path, "/preview"):
 		h.previewPersonalVaultDocument(w, r)
 
@@ -134,7 +133,11 @@ func (h *Handler) listPersonalVault(
 		return
 	}
 
-	writeJSON(w, http.StatusOK, documents)
+	writeJSON(
+		w,
+		http.StatusOK,
+		documents,
+	)
 }
 
 func (h *Handler) getPersonalVaultDocument(
@@ -225,8 +228,20 @@ func (h *Handler) previewPersonalVaultDocument(
 	const prefix = "/documents/"
 	const suffix = "/preview"
 
+	path := r.URL.Path
+
+	if !strings.HasPrefix(path, prefix) ||
+		!strings.HasSuffix(path, suffix) {
+		http.Error(
+			w,
+			"invalid document path",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
 	documentIDText := strings.TrimSuffix(
-		strings.TrimPrefix(r.URL.Path, prefix),
+		strings.TrimPrefix(path, prefix),
 		suffix,
 	)
 
@@ -256,6 +271,21 @@ func (h *Handler) previewPersonalVaultDocument(
 	}
 	defer file.Close()
 
+	filename := strings.NewReplacer(
+		"\\",
+		"_",
+		"\"",
+		"_",
+		"\r",
+		"_",
+		"\n",
+		"_",
+	).Replace(document.OriginalFilename)
+
+	if filename == "" {
+		filename = "document"
+	}
+
 	w.Header().Set(
 		"Content-Type",
 		document.MIMEType,
@@ -263,25 +293,22 @@ func (h *Handler) previewPersonalVaultDocument(
 
 	w.Header().Set(
 		"Content-Length",
-		strconv.FormatInt(document.FileSizeBytes, 10),
+		strconv.FormatInt(
+			document.FileSizeBytes,
+			10,
+		),
 	)
-
-	safeFilename := strings.NewReplacer(
-		"\r", "",
-		"\n", "",
-		"\"", "",
-	).Replace(document.OriginalFilename)
 
 	w.Header().Set(
 		"Content-Disposition",
-		"inline; filename=\""+
-			safeFilename+
-			"\"",
+		`inline; filename="`+filename+`"`,
 	)
 
 	w.WriteHeader(http.StatusOK)
 
-	_, _ = io.Copy(w, file)
+	if _, err := io.Copy(w, file); err != nil {
+		return
+	}
 }
 
 func (h *Handler) uploadPersonalVaultDocument(
