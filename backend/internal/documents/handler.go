@@ -81,6 +81,18 @@ type SubgroupDocumentListService interface {
 	) ([]Document, error)
 }
 
+type SubgroupDocumentPreviewService interface {
+	PreviewSubgroupDocument(
+		ctx context.Context,
+		collegeID int64,
+		actorID int64,
+		actorRole string,
+		groupID int64,
+		subgroupID int64,
+		documentID int64,
+	) (io.ReadCloser, Document, error)
+}
+
 type Handler struct {
 	service ServiceInterface
 }
@@ -105,6 +117,16 @@ func (h *Handler) ServeHTTP(
 	case r.Method == http.MethodGet &&
 		r.URL.Path == "/documents":
 		h.listPersonalVault(w, r)
+
+	case r.Method == http.MethodGet &&
+		r.PathValue("group_id") != "" &&
+		r.PathValue("subgroup_id") != "" &&
+		strings.HasSuffix(r.URL.Path, "/preview"):
+		h.previewSubgroupDocument(w, r)
+
+	case r.Method == http.MethodGet &&
+		strings.HasSuffix(r.URL.Path, "/preview"):
+		h.previewPersonalVaultDocument(w, r)
 
 	case r.Method == http.MethodGet &&
 		strings.HasSuffix(r.URL.Path, "/preview"):
@@ -300,6 +322,168 @@ func (h *Handler) previewPersonalVaultDocument(
 		r.Context(),
 		claims.CollegeID,
 		claims.UserID,
+		documentID,
+	)
+	if err != nil {
+		writeDocumentServiceError(w, err)
+		return
+	}
+	defer file.Close()
+
+	filename := strings.NewReplacer(
+		"\\",
+		"_",
+		`"`,
+		"_",
+		"\r",
+		"_",
+		"\n",
+		"_",
+	).Replace(document.OriginalFilename)
+
+	if filename == "" {
+		filename = "document"
+	}
+
+	w.Header().Set(
+		"Content-Type",
+		document.MIMEType,
+	)
+
+	w.Header().Set(
+		"Content-Length",
+		strconv.FormatInt(
+			document.FileSizeBytes,
+			10,
+		),
+	)
+
+	w.Header().Set(
+		"Content-Disposition",
+		`inline; filename="`+filename+`"`,
+	)
+
+	w.WriteHeader(http.StatusOK)
+
+	if _, err := io.Copy(w, file); err != nil {
+		return
+	}
+}
+
+func (h *Handler) previewSubgroupDocument(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		http.Error(
+			w,
+			"unauthorized",
+			http.StatusUnauthorized,
+		)
+		return
+	}
+
+	if claims.Role != "college_admin" &&
+		claims.Role != "faculty" {
+		http.Error(
+			w,
+			"forbidden",
+			http.StatusForbidden,
+		)
+		return
+	}
+
+	groupID, err := strconv.ParseInt(
+		r.PathValue("group_id"),
+		10,
+		64,
+	)
+	if err != nil || groupID <= 0 {
+		http.Error(
+			w,
+			"invalid group ID",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	subgroupID, err := strconv.ParseInt(
+		r.PathValue("subgroup_id"),
+		10,
+		64,
+	)
+	if err != nil || subgroupID <= 0 {
+		http.Error(
+			w,
+			"invalid subgroup ID",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	const prefix = "/groups/"
+	const middle = "/subgroups/"
+	const suffix = "/documents/"
+	const previewSuffix = "/preview"
+
+	path := r.URL.Path
+
+	if !strings.HasPrefix(path, prefix) ||
+		!strings.Contains(path, middle) ||
+		!strings.Contains(path, suffix) ||
+		!strings.HasSuffix(path, previewSuffix) {
+		http.Error(
+			w,
+			"invalid document path",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	documentPart := strings.TrimSuffix(
+		path,
+		previewSuffix,
+	)
+
+	documentPart = strings.TrimPrefix(
+		documentPart,
+		"/groups/"+strconv.FormatInt(groupID, 10)+
+			"/subgroups/"+strconv.FormatInt(subgroupID, 10)+
+			"/documents/",
+	)
+
+	documentID, err := strconv.ParseInt(
+		documentPart,
+		10,
+		64,
+	)
+	if err != nil || documentID <= 0 {
+		http.Error(
+			w,
+			"invalid document ID",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	service, ok := h.service.(SubgroupDocumentPreviewService)
+	if !ok {
+		http.Error(
+			w,
+			"subgroup document preview service is unavailable",
+			http.StatusServiceUnavailable,
+		)
+		return
+	}
+
+	file, document, err := service.PreviewSubgroupDocument(
+		r.Context(),
+		claims.CollegeID,
+		claims.UserID,
+		claims.Role,
+		groupID,
+		subgroupID,
 		documentID,
 	)
 	if err != nil {

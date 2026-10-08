@@ -317,6 +317,170 @@ func (s *Service) ListSubgroupDocuments(
 	return documents, nil
 }
 
+// PreviewSubgroupDocument opens an active document stored in a subgroup.
+//
+// College admins can access any subgroup in their college.
+// Faculty can access subgroups belonging to groups where they are members.
+// Students are not allowed to preview subgroup documents.
+func (s *Service) PreviewSubgroupDocument(
+	ctx context.Context,
+	collegeID int64,
+	actorID int64,
+	actorRole string,
+	groupID int64,
+	subgroupID int64,
+	documentID int64,
+) (io.ReadCloser, Document, error) {
+	if collegeID <= 0 ||
+		actorID <= 0 ||
+		groupID <= 0 ||
+		subgroupID <= 0 ||
+		documentID <= 0 {
+		return nil, Document{}, ErrInvalidInput
+	}
+
+	if actorRole != "college_admin" && actorRole != "faculty" {
+		return nil, Document{}, ErrForbidden
+	}
+
+	if s.storage == nil {
+		return nil, Document{}, errors.New(
+			"document storage is not configured",
+		)
+	}
+
+	// Faculty must belong to the requested parent group.
+	if actorRole == "faculty" {
+		const membershipQuery = `
+			SELECT EXISTS (
+				SELECT 1
+				FROM group_memberships
+				WHERE college_id = $1
+				  AND group_id = $2
+				  AND user_id = $3
+				  AND membership_role = 'faculty'
+			)
+		`
+
+		var isMember bool
+
+		err := s.db.QueryRow(
+			ctx,
+			membershipQuery,
+			collegeID,
+			groupID,
+			actorID,
+		).Scan(&isMember)
+
+		if err != nil {
+			return nil, Document{}, fmt.Errorf(
+				"preview subgroup document: check faculty membership: %w",
+				err,
+			)
+		}
+
+		if !isMember {
+			return nil, Document{}, ErrForbidden
+		}
+	}
+
+	// Verify that the subgroup belongs to the requested group and
+	// college and is still active.
+	const subgroupQuery = `
+		SELECT EXISTS (
+			SELECT 1
+			FROM subgroups
+			WHERE id = $1
+			  AND group_id = $2
+			  AND college_id = $3
+			  AND is_active = TRUE
+		)
+	`
+
+	var subgroupExists bool
+
+	err := s.db.QueryRow(
+		ctx,
+		subgroupQuery,
+		subgroupID,
+		groupID,
+		collegeID,
+	).Scan(&subgroupExists)
+
+	if err != nil {
+		return nil, Document{}, fmt.Errorf(
+			"preview subgroup document: check subgroup: %w",
+			err,
+		)
+	}
+
+	if !subgroupExists {
+		return nil, Document{}, ErrDocumentNotFound
+	}
+
+	// The document must belong to the requested subgroup and
+	// must not have been soft-deleted.
+	const documentQuery = `
+		SELECT
+			id,
+			original_filename,
+			mime_type,
+			file_size_bytes,
+			sha256,
+			uploaded_at,
+			storage_key
+		FROM documents
+		WHERE id = $1
+		  AND college_id = $2
+		  AND subgroup_id = $3
+		  AND deleted_at IS NULL
+	`
+
+	var document Document
+	var storageKey string
+
+	err = s.db.QueryRow(
+		ctx,
+		documentQuery,
+		documentID,
+		collegeID,
+		subgroupID,
+	).Scan(
+		&document.ID,
+		&document.OriginalFilename,
+		&document.MIMEType,
+		&document.FileSizeBytes,
+		&document.SHA256,
+		&document.UploadedAt,
+		&storageKey,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, Document{}, ErrDocumentNotFound
+		}
+
+		return nil, Document{}, fmt.Errorf(
+			"preview subgroup document: query document: %w",
+			err,
+		)
+	}
+
+	file, err := s.storage.Open(storageKey)
+	if err != nil {
+		if errors.Is(err, ErrStorageNotFound) {
+			return nil, Document{}, ErrDocumentNotFound
+		}
+
+		return nil, Document{}, fmt.Errorf(
+			"preview subgroup document: open storage object: %w",
+			err,
+		)
+	}
+
+	return file, document, nil
+}
+
 func (s *Service) GetPersonalVaultDocument(
 	ctx context.Context,
 	collegeID int64,

@@ -54,6 +54,16 @@ type handlerTestService struct {
 		groupID int64,
 		subgroupID int64,
 	) ([]Document, error)
+
+	subgroupPreviewFn func(
+		ctx context.Context,
+		collegeID int64,
+		actorID int64,
+		actorRole string,
+		groupID int64,
+		subgroupID int64,
+		documentID int64,
+	) (io.ReadCloser, Document, error)
 }
 
 func (s *handlerTestService) ListPersonalVault(
@@ -160,6 +170,32 @@ func (s *handlerTestService) ListSubgroupDocuments(
 	)
 }
 
+func (s *handlerTestService) PreviewSubgroupDocument(
+	ctx context.Context,
+	collegeID int64,
+	actorID int64,
+	actorRole string,
+	groupID int64,
+	subgroupID int64,
+	documentID int64,
+) (io.ReadCloser, Document, error) {
+	if s.subgroupPreviewFn == nil {
+		return nil, Document{}, errors.New(
+			"subgroup preview function not configured",
+		)
+	}
+
+	return s.subgroupPreviewFn(
+		ctx,
+		collegeID,
+		actorID,
+		actorRole,
+		groupID,
+		subgroupID,
+		documentID,
+	)
+}
+
 func newDocumentTestTokenService() *auth.TokenService {
 	return auth.NewTokenService(
 		"01234567890123456789012345678901",
@@ -192,6 +228,51 @@ func makeDocumentAuthenticatedRequest(
 		path,
 		strings.NewReader(""),
 	)
+
+	req.Header.Set(
+		"Authorization",
+		"Bearer "+token,
+	)
+
+	recorder := httptest.NewRecorder()
+
+	auth.AuthMiddleware(
+		tokens,
+		handler,
+	).ServeHTTP(recorder, req)
+
+	return recorder
+}
+
+func makeSubgroupPreviewAuthenticatedRequest(
+	t *testing.T,
+	handler http.Handler,
+	path string,
+	role string,
+	groupID string,
+	subgroupID string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+
+	tokens := newDocumentTestTokenService()
+
+	token, err := tokens.Generate(auth.User{
+		ID:        42,
+		CollegeID: 7,
+		Role:      role,
+	})
+	if err != nil {
+		t.Fatalf("generate token: %v", err)
+	}
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		path,
+		nil,
+	)
+
+	req.SetPathValue("group_id", groupID)
+	req.SetPathValue("subgroup_id", subgroupID)
 
 	req.Header.Set(
 		"Authorization",
@@ -2076,6 +2157,368 @@ func TestPreviewPersonalVaultDocumentHandlerServiceError(
 		http.MethodGet,
 		"/documents/100/preview",
 		"student",
+	)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf(
+			"expected status 500, got %d",
+			recorder.Code,
+		)
+	}
+}
+
+func TestPreviewSubgroupDocumentHandlerSuccess(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("%PDF-1.7\nsubgroup certificate contents")
+
+	service := &handlerTestService{
+		subgroupPreviewFn: func(
+			ctx context.Context,
+			collegeID int64,
+			actorID int64,
+			actorRole string,
+			groupID int64,
+			subgroupID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			if collegeID != 7 {
+				t.Errorf("expected college ID 7, got %d", collegeID)
+			}
+
+			if actorID != 42 {
+				t.Errorf("expected actor ID 42, got %d", actorID)
+			}
+
+			if actorRole != "faculty" {
+				t.Errorf("expected role faculty, got %s", actorRole)
+			}
+
+			if groupID != 10 {
+				t.Errorf("expected group ID 10, got %d", groupID)
+			}
+
+			if subgroupID != 20 {
+				t.Errorf("expected subgroup ID 20, got %d", subgroupID)
+			}
+
+			if documentID != 100 {
+				t.Errorf("expected document ID 100, got %d", documentID)
+			}
+
+			return io.NopCloser(
+				bytes.NewReader(data),
+			), Document{
+				ID:               100,
+				OriginalFilename: "internship-certificate.pdf",
+				MIMEType:         "application/pdf",
+				FileSizeBytes:    int64(len(data)),
+			}, nil
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeSubgroupPreviewAuthenticatedRequest(
+		t,
+		handler,
+		"/groups/10/subgroups/20/documents/100/preview",
+		"faculty",
+		"10",
+		"20",
+	)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status 200, got %d. Body: %s",
+			recorder.Code,
+			recorder.Body.String(),
+		)
+	}
+
+	if recorder.Header().Get("Content-Type") != "application/pdf" {
+		t.Fatalf(
+			"unexpected Content-Type: %q",
+			recorder.Header().Get("Content-Type"),
+		)
+	}
+
+	if recorder.Header().Get("Content-Length") != strconv.Itoa(len(data)) {
+		t.Fatalf(
+			"unexpected Content-Length: %q",
+			recorder.Header().Get("Content-Length"),
+		)
+	}
+
+	if recorder.Header().Get("Content-Disposition") !=
+		`inline; filename="internship-certificate.pdf"` {
+		t.Fatalf(
+			"unexpected Content-Disposition: %q",
+			recorder.Header().Get("Content-Disposition"),
+		)
+	}
+
+	if !bytes.Equal(recorder.Body.Bytes(), data) {
+		t.Fatal("preview response body does not match document")
+	}
+}
+
+func TestPreviewSubgroupDocumentHandlerStudentForbidden(t *testing.T) {
+	t.Parallel()
+
+	service := &handlerTestService{
+		subgroupPreviewFn: func(
+			ctx context.Context,
+			collegeID int64,
+			actorID int64,
+			actorRole string,
+			groupID int64,
+			subgroupID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			t.Fatal("service should not be called for student")
+			return nil, Document{}, nil
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeSubgroupPreviewAuthenticatedRequest(
+		t,
+		handler,
+		"/groups/10/subgroups/20/documents/100/preview",
+		"student",
+		"10",
+		"20",
+	)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf(
+			"expected status 403, got %d",
+			recorder.Code,
+		)
+	}
+}
+
+func TestPreviewSubgroupDocumentHandlerCollegeAdminSuccess(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("%PDF-1.7\nadmin preview")
+
+	service := &handlerTestService{
+		subgroupPreviewFn: func(
+			ctx context.Context,
+			collegeID int64,
+			actorID int64,
+			actorRole string,
+			groupID int64,
+			subgroupID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			if collegeID != 7 {
+				t.Errorf("expected college ID 7, got %d", collegeID)
+			}
+
+			if actorID != 42 {
+				t.Errorf("expected actor ID 42, got %d", actorID)
+			}
+
+			if actorRole != "college_admin" {
+				t.Errorf(
+					"expected role college_admin, got %s",
+					actorRole,
+				)
+			}
+
+			if groupID != 10 {
+				t.Errorf("expected group ID 10, got %d", groupID)
+			}
+
+			if subgroupID != 20 {
+				t.Errorf("expected subgroup ID 20, got %d", subgroupID)
+			}
+
+			if documentID != 100 {
+				t.Errorf("expected document ID 100, got %d", documentID)
+			}
+
+			return io.NopCloser(
+				bytes.NewReader(data),
+			), Document{
+				ID:               100,
+				OriginalFilename: "admin-preview.pdf",
+				MIMEType:         "application/pdf",
+				FileSizeBytes:    int64(len(data)),
+			}, nil
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeSubgroupPreviewAuthenticatedRequest(
+		t,
+		handler,
+		"/groups/10/subgroups/20/documents/100/preview",
+		"college_admin",
+		"10",
+		"20",
+	)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status 200, got %d. Body: %s",
+			recorder.Code,
+			recorder.Body.String(),
+		)
+	}
+
+	if !bytes.Equal(recorder.Body.Bytes(), data) {
+		t.Fatal("preview response body does not match document")
+	}
+}
+
+func TestPreviewSubgroupDocumentHandlerUnauthorized(t *testing.T) {
+	t.Parallel()
+
+	service := &handlerTestService{
+		subgroupPreviewFn: func(
+			ctx context.Context,
+			collegeID int64,
+			actorID int64,
+			actorRole string,
+			groupID int64,
+			subgroupID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			t.Fatal("service should not be called")
+			return nil, Document{}, nil
+		},
+	}
+
+	handler := NewHandler(service)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/groups/10/subgroups/20/documents/100/preview",
+		nil,
+	)
+
+	req.SetPathValue("group_id", "10")
+	req.SetPathValue("subgroup_id", "20")
+
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf(
+			"expected status 401, got %d",
+			recorder.Code,
+		)
+	}
+}
+
+func TestPreviewSubgroupDocumentHandlerInvalidDocumentID(t *testing.T) {
+	t.Parallel()
+
+	service := &handlerTestService{
+		subgroupPreviewFn: func(
+			ctx context.Context,
+			collegeID int64,
+			actorID int64,
+			actorRole string,
+			groupID int64,
+			subgroupID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			t.Fatal("service should not be called")
+			return nil, Document{}, nil
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeSubgroupPreviewAuthenticatedRequest(
+		t,
+		handler,
+		"/groups/10/subgroups/20/documents/not-a-number/preview",
+		"faculty",
+		"10",
+		"20",
+	)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status 400, got %d",
+			recorder.Code,
+		)
+	}
+}
+
+func TestPreviewSubgroupDocumentHandlerNotFound(t *testing.T) {
+	t.Parallel()
+
+	service := &handlerTestService{
+		subgroupPreviewFn: func(
+			ctx context.Context,
+			collegeID int64,
+			actorID int64,
+			actorRole string,
+			groupID int64,
+			subgroupID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			return nil, Document{}, ErrDocumentNotFound
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeSubgroupPreviewAuthenticatedRequest(
+		t,
+		handler,
+		"/groups/10/subgroups/20/documents/100/preview",
+		"faculty",
+		"10",
+		"20",
+	)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf(
+			"expected status 404, got %d",
+			recorder.Code,
+		)
+	}
+}
+
+func TestPreviewSubgroupDocumentHandlerServiceError(t *testing.T) {
+	t.Parallel()
+
+	expectedErr := errors.New("preview failure")
+
+	service := &handlerTestService{
+		subgroupPreviewFn: func(
+			ctx context.Context,
+			collegeID int64,
+			actorID int64,
+			actorRole string,
+			groupID int64,
+			subgroupID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			return nil, Document{}, expectedErr
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeSubgroupPreviewAuthenticatedRequest(
+		t,
+		handler,
+		"/groups/10/subgroups/20/documents/100/preview",
+		"faculty",
+		"10",
+		"20",
 	)
 
 	if recorder.Code != http.StatusInternalServerError {

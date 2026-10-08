@@ -94,6 +94,16 @@ func (m *mockRow) Scan(dest ...any) error {
 
 			*target = value
 
+		case *bool:
+			value, ok := m.values[i].(bool)
+			if !ok {
+				return errors.New(
+					"invalid bool value",
+				)
+			}
+
+			*target = value
+
 		case *time.Time:
 			value, ok := m.values[i].(time.Time)
 			if !ok {
@@ -1848,6 +1858,831 @@ func TestService_PreviewPersonalVaultDocument_StorageError(
 		context.Background(),
 		1,
 		7,
+		42,
+	)
+
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf(
+			"expected storage error, got %v",
+			err,
+		)
+	}
+}
+
+func TestPreviewSubgroupDocumentSuccessCollegeAdmin(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	uploadedAt := time.Date(
+		2026,
+		10,
+		1,
+		12,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+
+	expectedContent := []byte(
+		"%PDF-1.7\nsubgroup-certificate",
+	)
+
+	storageKey := "documents/subgroup/test-preview.pdf"
+
+	storage := &mockStorage{
+		openFunc: func(
+			key string,
+		) (io.ReadCloser, error) {
+			if key != storageKey {
+				t.Fatalf(
+					"expected storage key %q, got %q",
+					storageKey,
+					key,
+				)
+			}
+
+			return io.NopCloser(
+				bytes.NewReader(expectedContent),
+			), nil
+		},
+	}
+
+	queryCount := 0
+
+	db := &mockDB{
+		queryRowFunc: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			queryCount++
+
+			switch queryCount {
+			case 1:
+				if len(args) != 3 {
+					t.Fatalf(
+						"expected 3 subgroup query arguments, got %d",
+						len(args),
+					)
+				}
+
+				if args[0] != int64(20) {
+					t.Errorf(
+						"expected subgroup ID 20, got %v",
+						args[0],
+					)
+				}
+
+				if args[1] != int64(10) {
+					t.Errorf(
+						"expected group ID 10, got %v",
+						args[1],
+					)
+				}
+
+				if args[2] != int64(1) {
+					t.Errorf(
+						"expected college ID 1, got %v",
+						args[2],
+					)
+				}
+
+				if !strings.Contains(
+					sql,
+					"AND group_id = $2",
+				) {
+					t.Fatal(
+						"expected query to enforce parent group",
+					)
+				}
+
+				if !strings.Contains(
+					sql,
+					"AND college_id = $3",
+				) {
+					t.Fatal(
+						"expected query to enforce college isolation",
+					)
+				}
+
+				if !strings.Contains(
+					sql,
+					"is_active = TRUE",
+				) {
+					t.Fatal(
+						"expected query to require active subgroup",
+					)
+				}
+
+				return &mockRow{
+					values: []any{
+						true,
+					},
+				}
+
+			case 2:
+				if len(args) != 3 {
+					t.Fatalf(
+						"expected 3 document query arguments, got %d",
+						len(args),
+					)
+				}
+
+				if args[0] != int64(42) {
+					t.Errorf(
+						"expected document ID 42, got %v",
+						args[0],
+					)
+				}
+
+				if args[1] != int64(1) {
+					t.Errorf(
+						"expected college ID 1, got %v",
+						args[1],
+					)
+				}
+
+				if args[2] != int64(20) {
+					t.Errorf(
+						"expected subgroup ID 20, got %v",
+						args[2],
+					)
+				}
+
+				if !strings.Contains(
+					sql,
+					"subgroup_id = $3",
+				) {
+					t.Fatal(
+						"expected query to restrict document to requested subgroup",
+					)
+				}
+
+				if !strings.Contains(
+					sql,
+					"deleted_at IS NULL",
+				) {
+					t.Fatal(
+						"expected query to exclude deleted documents",
+					)
+				}
+
+				if !strings.Contains(
+					sql,
+					"storage_key",
+				) {
+					t.Fatal(
+						"expected query to select storage_key",
+					)
+				}
+
+				return &mockRow{
+					values: []any{
+						int64(42),
+						"certificate.pdf",
+						"application/pdf",
+						int64(len(expectedContent)),
+						"abc123",
+						uploadedAt,
+						storageKey,
+					},
+				}
+
+			default:
+				t.Fatalf(
+					"unexpected QueryRow call %d",
+					queryCount,
+				)
+				return nil
+			}
+		},
+	}
+
+	service := NewServiceWithStorage(
+		db,
+		storage,
+	)
+
+	file, document, err := service.PreviewSubgroupDocument(
+		context.Background(),
+		1,
+		7,
+		"college_admin",
+		10,
+		20,
+		42,
+	)
+
+	if err != nil {
+		t.Fatalf(
+			"expected no error, got %v",
+			err,
+		)
+	}
+
+	defer file.Close()
+
+	if document.ID != 42 {
+		t.Errorf(
+			"expected document ID 42, got %d",
+			document.ID,
+		)
+	}
+
+	if document.OriginalFilename != "certificate.pdf" {
+		t.Errorf(
+			"expected filename certificate.pdf, got %s",
+			document.OriginalFilename,
+		)
+	}
+
+	if document.MIMEType != "application/pdf" {
+		t.Errorf(
+			"expected MIME type application/pdf, got %s",
+			document.MIMEType,
+		)
+	}
+
+	if document.FileSizeBytes != int64(len(expectedContent)) {
+		t.Errorf(
+			"expected file size %d, got %d",
+			len(expectedContent),
+			document.FileSizeBytes,
+		)
+	}
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatalf(
+			"failed to read preview content: %v",
+			err,
+		)
+	}
+
+	if !bytes.Equal(content, expectedContent) {
+		t.Errorf(
+			"expected content %q, got %q",
+			expectedContent,
+			content,
+		)
+	}
+}
+
+func TestPreviewSubgroupDocumentSuccessFaculty(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	storageKey := "documents/subgroup/faculty-preview.pdf"
+
+	storage := &mockStorage{
+		openFunc: func(
+			key string,
+		) (io.ReadCloser, error) {
+			if key != storageKey {
+				t.Fatalf(
+					"expected storage key %q, got %q",
+					storageKey,
+					key,
+				)
+			}
+
+			return io.NopCloser(
+				bytes.NewReader([]byte("faculty-preview")),
+			), nil
+		},
+	}
+
+	queryCount := 0
+
+	db := &mockDB{
+		queryRowFunc: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			queryCount++
+
+			switch queryCount {
+			case 1:
+				if len(args) != 3 {
+					t.Fatalf(
+						"expected 3 membership query arguments, got %d",
+						len(args),
+					)
+				}
+
+				if args[0] != int64(1) ||
+					args[1] != int64(10) ||
+					args[2] != int64(8) {
+					t.Errorf(
+						"unexpected membership arguments: %v",
+						args,
+					)
+				}
+
+				if !strings.Contains(
+					sql,
+					"membership_role = 'faculty'",
+				) {
+					t.Fatal(
+						"expected faculty membership check",
+					)
+				}
+
+				return &mockRow{
+					values: []any{
+						true,
+					},
+				}
+
+			case 2:
+				return &mockRow{
+					values: []any{
+						true,
+					},
+				}
+
+			case 3:
+				return &mockRow{
+					values: []any{
+						int64(42),
+						"faculty-certificate.pdf",
+						"application/pdf",
+						int64(15),
+						"abc123",
+						time.Date(
+							2026,
+							10,
+							1,
+							12,
+							0,
+							0,
+							0,
+							time.UTC,
+						),
+						storageKey,
+					},
+				}
+
+			default:
+				t.Fatalf(
+					"unexpected QueryRow call %d",
+					queryCount,
+				)
+				return nil
+			}
+		},
+	}
+
+	service := NewServiceWithStorage(
+		db,
+		storage,
+	)
+
+	file, document, err := service.PreviewSubgroupDocument(
+		context.Background(),
+		1,
+		8,
+		"faculty",
+		10,
+		20,
+		42,
+	)
+
+	if err != nil {
+		t.Fatalf(
+			"expected no error, got %v",
+			err,
+		)
+	}
+
+	defer file.Close()
+
+	if document.ID != 42 {
+		t.Errorf(
+			"expected document ID 42, got %d",
+			document.ID,
+		)
+	}
+}
+
+func TestPreviewSubgroupDocumentInvalidInput(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	service := NewServiceWithStorage(
+		&mockDB{},
+		&mockStorage{},
+	)
+
+	testCases := []struct {
+		name       string
+		collegeID  int64
+		actorID    int64
+		actorRole  string
+		groupID    int64
+		subgroupID int64
+		documentID int64
+	}{
+		{
+			name:       "invalid college ID",
+			collegeID:  0,
+			actorID:    7,
+			actorRole:  "college_admin",
+			groupID:    10,
+			subgroupID: 20,
+			documentID: 42,
+		},
+		{
+			name:       "invalid actor ID",
+			collegeID:  1,
+			actorID:    0,
+			actorRole:  "college_admin",
+			groupID:    10,
+			subgroupID: 20,
+			documentID: 42,
+		},
+		{
+			name:       "invalid group ID",
+			collegeID:  1,
+			actorID:    7,
+			actorRole:  "college_admin",
+			groupID:    0,
+			subgroupID: 20,
+			documentID: 42,
+		},
+		{
+			name:       "invalid subgroup ID",
+			collegeID:  1,
+			actorID:    7,
+			actorRole:  "college_admin",
+			groupID:    10,
+			subgroupID: 0,
+			documentID: 42,
+		},
+		{
+			name:       "invalid document ID",
+			collegeID:  1,
+			actorID:    7,
+			actorRole:  "college_admin",
+			groupID:    10,
+			subgroupID: 20,
+			documentID: 0,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := service.PreviewSubgroupDocument(
+				context.Background(),
+				tc.collegeID,
+				tc.actorID,
+				tc.actorRole,
+				tc.groupID,
+				tc.subgroupID,
+				tc.documentID,
+			)
+
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf(
+					"expected ErrInvalidInput, got %v",
+					err,
+				)
+			}
+		})
+	}
+}
+
+func TestPreviewSubgroupDocumentForbiddenRole(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	service := NewServiceWithStorage(
+		&mockDB{},
+		&mockStorage{},
+	)
+
+	_, _, err := service.PreviewSubgroupDocument(
+		context.Background(),
+		1,
+		7,
+		"student",
+		10,
+		20,
+		42,
+	)
+
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf(
+			"expected ErrForbidden, got %v",
+			err,
+		)
+	}
+}
+
+func TestPreviewSubgroupDocumentFacultyNotMember(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	db := &mockDB{
+		queryRowFunc: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			if !strings.Contains(
+				sql,
+				"membership_role = 'faculty'",
+			) {
+				t.Fatal(
+					"expected faculty membership query",
+				)
+			}
+
+			return &mockRow{
+				values: []any{
+					false,
+				},
+			}
+		},
+	}
+
+	service := NewServiceWithStorage(
+		db,
+		&mockStorage{},
+	)
+
+	_, _, err := service.PreviewSubgroupDocument(
+		context.Background(),
+		1,
+		99,
+		"faculty",
+		10,
+		20,
+		42,
+	)
+
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf(
+			"expected ErrForbidden, got %v",
+			err,
+		)
+	}
+}
+
+func TestPreviewSubgroupDocumentSubgroupNotFound(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	db := &mockDB{
+		queryRowFunc: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			return &mockRow{
+				values: []any{
+					false,
+				},
+			}
+		},
+	}
+
+	service := NewServiceWithStorage(
+		db,
+		&mockStorage{},
+	)
+
+	_, _, err := service.PreviewSubgroupDocument(
+		context.Background(),
+		1,
+		7,
+		"college_admin",
+		10,
+		20,
+		42,
+	)
+
+	if !errors.Is(err, ErrDocumentNotFound) {
+		t.Fatalf(
+			"expected ErrDocumentNotFound, got %v",
+			err,
+		)
+	}
+}
+
+func TestPreviewSubgroupDocumentDocumentNotFound(
+	t *testing.T,
+) {
+	queryCount := 0
+
+	db := &mockDB{
+		queryRowFunc: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			queryCount++
+
+			if queryCount == 1 {
+				return &mockRow{
+					values: []any{
+						true,
+					},
+				}
+			}
+
+			return &mockRow{
+				err: pgx.ErrNoRows,
+			}
+		},
+	}
+
+	service := NewServiceWithStorage(
+		db,
+		&mockStorage{},
+	)
+
+	_, _, err := service.PreviewSubgroupDocument(
+		context.Background(),
+		1,
+		7,
+		"college_admin",
+		10,
+		20,
+		42,
+	)
+
+	if !errors.Is(err, ErrDocumentNotFound) {
+		t.Fatalf(
+			"expected ErrDocumentNotFound, got %v",
+			err,
+		)
+	}
+}
+
+func TestPreviewSubgroupDocumentStorageNotFound(
+	t *testing.T,
+) {
+	storage := &mockStorage{
+		openFunc: func(
+			key string,
+		) (io.ReadCloser, error) {
+			return nil, ErrStorageNotFound
+		},
+	}
+
+	queryCount := 0
+
+	db := &mockDB{
+		queryRowFunc: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			queryCount++
+
+			switch queryCount {
+			case 1:
+				return &mockRow{
+					values: []any{
+						true,
+					},
+				}
+			case 2:
+				return &mockRow{
+					values: []any{
+						int64(42),
+						"certificate.pdf",
+						"application/pdf",
+						int64(100),
+						"abc123",
+						time.Date(
+							2026,
+							10,
+							1,
+							12,
+							0,
+							0,
+							0,
+							time.UTC,
+						),
+						"documents/subgroup/certificate.pdf",
+					},
+				}
+			default:
+				t.Fatalf(
+					"unexpected QueryRow call %d",
+					queryCount,
+				)
+				return nil
+			}
+		},
+	}
+
+	service := NewServiceWithStorage(
+		db,
+		storage,
+	)
+
+	_, _, err := service.PreviewSubgroupDocument(
+		context.Background(),
+		1,
+		7,
+		"college_admin",
+		10,
+		20,
+		42,
+	)
+
+	if !errors.Is(err, ErrDocumentNotFound) {
+		t.Fatalf(
+			"expected ErrDocumentNotFound, got %v",
+			err,
+		)
+	}
+}
+
+func TestPreviewSubgroupDocumentStorageError(
+	t *testing.T,
+) {
+	expectedErr := errors.New("storage unavailable")
+
+	storage := &mockStorage{
+		openFunc: func(
+			key string,
+		) (io.ReadCloser, error) {
+			return nil, expectedErr
+		},
+	}
+
+	queryCount := 0
+
+	db := &mockDB{
+		queryRowFunc: func(
+			ctx context.Context,
+			sql string,
+			args ...any,
+		) pgx.Row {
+			queryCount++
+
+			switch queryCount {
+			case 1:
+				return &mockRow{
+					values: []any{
+						true,
+					},
+				}
+			case 2:
+				return &mockRow{
+					values: []any{
+						int64(42),
+						"certificate.pdf",
+						"application/pdf",
+						int64(100),
+						"abc123",
+						time.Date(
+							2026,
+							10,
+							1,
+							12,
+							0,
+							0,
+							0,
+							time.UTC,
+						),
+						"documents/subgroup/certificate.pdf",
+					},
+				}
+			default:
+				t.Fatalf(
+					"unexpected QueryRow call %d",
+					queryCount,
+				)
+				return nil
+			}
+		},
+	}
+
+	service := NewServiceWithStorage(
+		db,
+		storage,
+	)
+
+	_, _, err := service.PreviewSubgroupDocument(
+		context.Background(),
+		1,
+		7,
+		"college_admin",
+		10,
+		20,
 		42,
 	)
 
