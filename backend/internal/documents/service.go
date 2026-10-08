@@ -343,12 +343,6 @@ func (s *Service) PreviewSubgroupDocument(
 		return nil, Document{}, ErrForbidden
 	}
 
-	if s.storage == nil {
-		return nil, Document{}, errors.New(
-			"document storage is not configured",
-		)
-	}
-
 	// Faculty must belong to the requested parent group.
 	if actorRole == "faculty" {
 		const membershipQuery = `
@@ -382,6 +376,12 @@ func (s *Service) PreviewSubgroupDocument(
 		if !isMember {
 			return nil, Document{}, ErrForbidden
 		}
+	}
+
+	if s.storage == nil {
+		return nil, Document{}, errors.New(
+			"document storage is not configured",
+		)
 	}
 
 	// Verify that the subgroup belongs to the requested group and
