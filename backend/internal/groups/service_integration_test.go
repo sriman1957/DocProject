@@ -300,6 +300,29 @@ func TestServiceListIntegration(t *testing.T) {
 	}
 
 	// ---------------------------------------------------------------------
+	// Create another active group that the student is NOT a member of.
+	// ---------------------------------------------------------------------
+
+	nonMemberGroup, err := service.Create(
+		ctx,
+		collegeA,
+		adminA,
+		"college_admin",
+		CreateInput{
+			BranchID:    branchA,
+			Name:        "Integration Non-Member Group",
+			Description: "Student should not see this group",
+		},
+	)
+	if err != nil {
+		t.Fatalf("create non-member group: %v", err)
+	}
+
+	if nonMemberGroup.ID == created.ID {
+		t.Fatal("expected a different group ID for non-member group")
+	}
+
+	// ---------------------------------------------------------------------
 	// Listing members should return the student.
 	// ---------------------------------------------------------------------
 
@@ -323,6 +346,35 @@ func TestServiceListIntegration(t *testing.T) {
 			"expected member user ID %d, got %d",
 			studentID,
 			members[0].UserID,
+		)
+	}
+
+	// ---------------------------------------------------------------------
+	// Student should only see groups they are a member of.
+	// ---------------------------------------------------------------------
+
+	studentGroups, err := service.List(
+		ctx,
+		collegeA,
+		studentID,
+		"student",
+	)
+	if err != nil {
+		t.Fatalf("list groups for student: %v", err)
+	}
+
+	if len(studentGroups) != 1 {
+		t.Fatalf(
+			"student: expected 1 visible group, got %d",
+			len(studentGroups),
+		)
+	}
+
+	if studentGroups[0].ID != created.ID {
+		t.Errorf(
+			"student: expected group ID %d, got %d",
+			created.ID,
+			studentGroups[0].ID,
 		)
 	}
 

@@ -879,16 +879,41 @@ func TestListGroupsAllowsFacultyToReachService(t *testing.T) {
 	}
 }
 
-func TestListGroupsForbiddenForStudent(t *testing.T) {
+func TestListGroupsAllowsStudentToReachService(t *testing.T) {
+	called := false
+
 	service := &testService{
 		listFn: func(
-			context.Context,
-			int64,
-			int64,
-			string,
+			_ context.Context,
+			collegeID int64,
+			userID int64,
+			role string,
 		) ([]Group, error) {
-			t.Fatal("service should not be called")
-			return nil, nil
+			called = true
+
+			if collegeID != 7 {
+				t.Errorf("expected college ID 7, got %d", collegeID)
+			}
+
+			if userID != 42 {
+				t.Errorf("expected user ID 42, got %d", userID)
+			}
+
+			if role != "student" {
+				t.Errorf("expected role student, got %q", role)
+			}
+
+			return []Group{
+				{
+					ID:          100,
+					CollegeID:   7,
+					BranchID:    3,
+					Name:        "IT 2024-2028",
+					Description: "IT department batch",
+					CreatedBy:   42,
+					IsActive:    true,
+				},
+			}, nil
 		},
 	}
 
@@ -900,11 +925,36 @@ func TestListGroupsForbiddenForStudent(t *testing.T) {
 		"student",
 	)
 
-	if recorder.Code != http.StatusForbidden {
+	if recorder.Code != http.StatusOK {
 		t.Fatalf(
-			"expected status %d, got %d",
-			http.StatusForbidden,
+			"expected status %d, got %d. Body: %s",
+			http.StatusOK,
 			recorder.Code,
+			recorder.Body.String(),
+		)
+	}
+
+	if !called {
+		t.Fatal("expected service to be called for student")
+	}
+
+	var groups []Group
+
+	if err := json.Unmarshal(
+		recorder.Body.Bytes(),
+		&groups,
+	); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+
+	if groups[0].ID != 100 {
+		t.Errorf(
+			"expected group ID 100, got %d",
+			groups[0].ID,
 		)
 	}
 }

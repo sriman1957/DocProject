@@ -158,7 +158,7 @@ func NewHandler(service groupService) http.Handler {
 			return
 		}
 
-		if claims.Role != "college_admin" && claims.Role != "faculty" {
+		if claims.Role != "college_admin" && claims.Role != "faculty" && claims.Role != "student" {
 			writeJSON(w, http.StatusForbidden, errorResponse{
 				Error: "forbidden",
 			})

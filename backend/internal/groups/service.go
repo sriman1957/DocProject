@@ -255,6 +255,9 @@ func (s *Service) List(
 	case "faculty":
 		// Authorization is enforced directly in the query below.
 
+	case "student":
+		// Students can only see groups they are members of.
+
 	default:
 		return nil, ErrForbidden
 	}
@@ -262,59 +265,87 @@ func (s *Service) List(
 	var query string
 	var args []any
 
-	if role == "college_admin" {
+	switch role {
+	case "college_admin":
 		query = `
-			SELECT
-				id,
-				college_id,
-				branch_id,
-				name,
-				COALESCE(description, ''),
-				created_by,
-				is_active,
-				created_at::text,
-				updated_at::text
-			FROM groups
-			WHERE college_id = $1
-			  AND is_active = TRUE
-			ORDER BY created_at DESC, id DESC
-		`
+		SELECT
+			id,
+			college_id,
+			branch_id,
+			name,
+			COALESCE(description, ''),
+			created_by,
+			is_active,
+			created_at::text,
+			updated_at::text
+		FROM groups
+		WHERE college_id = $1
+		  AND is_active = TRUE
+		ORDER BY created_at DESC, id DESC
+	`
 
 		args = []any{
 			collegeID,
 		}
-	} else {
+
+	case "faculty":
 		query = `
-			SELECT
-				g.id,
-				g.college_id,
-				g.branch_id,
-				g.name,
-				COALESCE(g.description, ''),
-				g.created_by,
-				g.is_active,
-				g.created_at::text,
-				g.updated_at::text
-			FROM groups g
-			WHERE g.college_id = $1
-			  AND g.is_active = TRUE
-			  AND EXISTS (
-				  SELECT 1
-				  FROM branch_admin_assignments baa
-				  WHERE baa.college_id = g.college_id
-				    AND baa.branch_id = g.branch_id
-				    AND baa.user_id = $2
-				    AND baa.is_active = TRUE
-			  )
-			ORDER BY g.created_at DESC, g.id DESC
-		`
+		SELECT
+			g.id,
+			g.college_id,
+			g.branch_id,
+			g.name,
+			COALESCE(g.description, ''),
+			g.created_by,
+			g.is_active,
+			g.created_at::text,
+			g.updated_at::text
+		FROM groups g
+		WHERE g.college_id = $1
+		  AND g.is_active = TRUE
+		  AND EXISTS (
+			  SELECT 1
+			  FROM branch_admin_assignments baa
+			  WHERE baa.college_id = g.college_id
+			    AND baa.branch_id = g.branch_id
+			    AND baa.user_id = $2
+			    AND baa.is_active = TRUE
+		  )
+		ORDER BY g.created_at DESC, g.id DESC
+	`
+
+		args = []any{
+			collegeID,
+			userID,
+		}
+
+	case "student":
+		query = `
+		SELECT
+			g.id,
+			g.college_id,
+			g.branch_id,
+			g.name,
+			COALESCE(g.description, ''),
+			g.created_by,
+			g.is_active,
+			g.created_at::text,
+			g.updated_at::text
+		FROM groups g
+		INNER JOIN group_memberships gm
+			ON gm.group_id = g.id
+		   AND gm.college_id = g.college_id
+		   AND gm.user_id = $2
+		WHERE g.college_id = $1
+		  AND g.is_active = TRUE
+		ORDER BY g.created_at DESC, g.id DESC
+	`
 
 		args = []any{
 			collegeID,
 			userID,
 		}
 	}
-
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list groups: query: %w", err)
