@@ -167,6 +167,156 @@ func (s *Service) ListPersonalVault(
 	return documents, nil
 }
 
+// ListSubgroupDocuments returns active documents stored in a subgroup.
+//
+// College admins can access any subgroup in their college.
+// Faculty can access subgroups belonging to groups where they are members.
+func (s *Service) ListSubgroupDocuments(
+	ctx context.Context,
+	collegeID int64,
+	actorID int64,
+	actorRole string,
+	groupID int64,
+	subgroupID int64,
+) ([]Document, error) {
+	if collegeID <= 0 ||
+		actorID <= 0 ||
+		groupID <= 0 ||
+		subgroupID <= 0 {
+		return nil, ErrInvalidInput
+	}
+
+	if actorRole != "college_admin" && actorRole != "faculty" {
+		return nil, ErrForbidden
+	}
+
+	// Faculty must belong to the requested group.
+	if actorRole == "faculty" {
+		const membershipQuery = `
+			SELECT EXISTS (
+				SELECT 1
+				FROM group_memberships
+				WHERE college_id = $1
+				  AND group_id = $2
+				  AND user_id = $3
+				  AND membership_role = 'faculty'
+			)
+		`
+
+		var isMember bool
+		err := s.db.QueryRow(
+			ctx,
+			membershipQuery,
+			collegeID,
+			groupID,
+			actorID,
+		).Scan(&isMember)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"list subgroup documents: check faculty membership: %w",
+				err,
+			)
+		}
+
+		if !isMember {
+			return nil, ErrForbidden
+		}
+	}
+
+	// Verify that the subgroup belongs to the requested group and college
+	// and is still active.
+	const subgroupQuery = `
+		SELECT EXISTS (
+			SELECT 1
+			FROM subgroups
+			WHERE id = $1
+			  AND group_id = $2
+			  AND college_id = $3
+			  AND is_active = TRUE
+		)
+	`
+
+	var subgroupExists bool
+	err := s.db.QueryRow(
+		ctx,
+		subgroupQuery,
+		subgroupID,
+		groupID,
+		collegeID,
+	).Scan(&subgroupExists)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"list subgroup documents: check subgroup: %w",
+			err,
+		)
+	}
+
+	if !subgroupExists {
+		return nil, ErrDocumentNotFound
+	}
+
+	// Return only active documents stored in this subgroup.
+	const documentsQuery = `
+		SELECT
+			id,
+			original_filename,
+			mime_type,
+			file_size_bytes,
+			sha256,
+			uploaded_at
+		FROM documents
+		WHERE college_id = $1
+		  AND subgroup_id = $2
+		  AND deleted_at IS NULL
+		ORDER BY uploaded_at DESC, id DESC
+	`
+
+	rows, err := s.db.Query(
+		ctx,
+		documentsQuery,
+		collegeID,
+		subgroupID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"list subgroup documents: query documents: %w",
+			err,
+		)
+	}
+	defer rows.Close()
+
+	documents := make([]Document, 0)
+
+	for rows.Next() {
+		var document Document
+
+		if err := rows.Scan(
+			&document.ID,
+			&document.OriginalFilename,
+			&document.MIMEType,
+			&document.FileSizeBytes,
+			&document.SHA256,
+			&document.UploadedAt,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"list subgroup documents: scan document: %w",
+				err,
+			)
+		}
+
+		documents = append(documents, document)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf(
+			"list subgroup documents: iterate documents: %w",
+			err,
+		)
+	}
+
+	return documents, nil
+}
+
 func (s *Service) GetPersonalVaultDocument(
 	ctx context.Context,
 	collegeID int64,

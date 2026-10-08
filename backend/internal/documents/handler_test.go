@@ -45,6 +45,15 @@ type handlerTestService struct {
 		studentID int64,
 		documentID int64,
 	) (io.ReadCloser, Document, error)
+
+	subgroupDocumentsFn func(
+		ctx context.Context,
+		collegeID int64,
+		actorID int64,
+		actorRole string,
+		groupID int64,
+		subgroupID int64,
+	) ([]Document, error)
 }
 
 func (s *handlerTestService) ListPersonalVault(
@@ -124,6 +133,30 @@ func (s *handlerTestService) PreviewPersonalVaultDocument(
 		collegeID,
 		studentID,
 		documentID,
+	)
+}
+
+func (s *handlerTestService) ListSubgroupDocuments(
+	ctx context.Context,
+	collegeID int64,
+	actorID int64,
+	actorRole string,
+	groupID int64,
+	subgroupID int64,
+) ([]Document, error) {
+	if s.subgroupDocumentsFn == nil {
+		return nil, errors.New(
+			"subgroup documents function not configured",
+		)
+	}
+
+	return s.subgroupDocumentsFn(
+		ctx,
+		collegeID,
+		actorID,
+		actorRole,
+		groupID,
+		subgroupID,
 	)
 }
 

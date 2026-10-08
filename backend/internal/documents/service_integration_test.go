@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -987,5 +988,450 @@ func TestCopyPersonalVaultDocumentIntegration(t *testing.T) {
 
 	if sourceCopiedFrom != nil {
 		t.Fatal("original document unexpectedly has copied_from_document_id")
+	}
+}
+
+func TestListSubgroupDocumentsIntegration(t *testing.T) {
+	if os.Getenv("DOCPROJECT_INTEGRATION_TESTS") != "1" {
+		t.Skip("set DOCPROJECT_INTEGRATION_TESTS=1 to run PostgreSQL integration tests")
+	}
+
+	if os.Getenv("APP_ENV") != "test" {
+		t.Fatal("integration tests require APP_ENV=test")
+	}
+
+	if os.Getenv("DB_NAME") != "docproject_test" {
+		t.Fatal("integration tests may only run against DB_NAME=docproject_test")
+	}
+
+	port, err := strconv.ParseUint(os.Getenv("DB_PORT"), 10, 16)
+	if err != nil || port == 0 {
+		t.Fatalf("invalid DB_PORT: %q", os.Getenv("DB_PORT"))
+	}
+
+	cfg := config.Config{
+		AppEnv:     "test",
+		DBHost:     os.Getenv("DB_HOST"),
+		DBPort:     uint16(port),
+		DBName:     "docproject_test",
+		DBUser:     os.Getenv("DB_USER"),
+		DBPassword: os.Getenv("DB_PASSWORD"),
+	}
+
+	if cfg.DBHost == "" || cfg.DBUser == "" {
+		t.Fatal("DB_HOST and DB_USER must be set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	pool, err := db.New(cfg)
+	if err != nil {
+		t.Fatalf("connect to test database: %v", err)
+	}
+	defer pool.Close()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+
+	defer func() {
+		_ = tx.Rollback(context.Background())
+	}()
+
+	// College A.
+	collegeA := createDocumentTestCollege(
+		t,
+		ctx,
+		tx,
+		"FEATURE19A",
+	)
+
+	// College B.
+	collegeB := createDocumentTestCollege(
+		t,
+		ctx,
+		tx,
+		"FEATURE19B",
+	)
+
+	adminA := createDocumentTestUser(
+		t,
+		ctx,
+		tx,
+		collegeA,
+		"feature19-admin",
+		"college_admin",
+	)
+
+	facultyMember := createDocumentTestUser(
+		t,
+		ctx,
+		tx,
+		collegeA,
+		"feature19-faculty-member",
+		"faculty",
+	)
+
+	facultyNonMember := createDocumentTestUser(
+		t,
+		ctx,
+		tx,
+		collegeA,
+		"feature19-faculty-nonmember",
+		"faculty",
+	)
+
+	studentA := createDocumentTestUser(
+		t,
+		ctx,
+		tx,
+		collegeA,
+		"feature19-student",
+		"student",
+	)
+
+	studentB := createDocumentTestUser(
+		t,
+		ctx,
+		tx,
+		collegeB,
+		"feature19-student-b",
+		"student",
+	)
+
+	var groupA int64
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO groups (
+			college_id,
+			name,
+			description,
+			created_by
+		)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id
+	`,
+		collegeA,
+		"Feature 19 Group",
+		"Feature 19 subgroup document listing group",
+		adminA,
+	).Scan(&groupA)
+
+	if err != nil {
+		t.Fatalf("create feature 19 group: %v", err)
+	}
+
+	var subgroupA int64
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO subgroups (
+			college_id,
+			group_id,
+			name,
+			description,
+			created_by
+		)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id
+	`,
+		collegeA,
+		groupA,
+		"Feature 19 Subgroup",
+		"Feature 19 subgroup document listing",
+		adminA,
+	).Scan(&subgroupA)
+
+	if err != nil {
+		t.Fatalf("create feature 19 subgroup: %v", err)
+	}
+
+	// Faculty member belongs to the requested group.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO group_memberships (
+			college_id,
+			group_id,
+			user_id,
+			membership_role
+		)
+		VALUES ($1, $2, $3, 'faculty')
+	`,
+		collegeA,
+		groupA,
+		facultyMember,
+	)
+
+	if err != nil {
+		t.Fatalf("create feature 19 faculty membership: %v", err)
+	}
+
+	// Student A also belongs to the group.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO group_memberships (
+			college_id,
+			group_id,
+			user_id,
+			membership_role
+		)
+		VALUES ($1, $2, $3, 'student')
+	`,
+		collegeA,
+		groupA,
+		studentA,
+	)
+
+	if err != nil {
+		t.Fatalf("create feature 19 student membership: %v", err)
+	}
+
+	// Active subgroup documents.
+	firstDocumentID := createDocumentTestDocument(
+		t,
+		ctx,
+		tx,
+		collegeA,
+		studentA,
+		&subgroupA,
+		"first.pdf",
+		"application/pdf",
+		100,
+	)
+
+	secondDocumentID := createDocumentTestDocument(
+		t,
+		ctx,
+		tx,
+		collegeA,
+		studentA,
+		&subgroupA,
+		"second.pdf",
+		"application/pdf",
+		200,
+	)
+
+	// Create a group and subgroup in another college.
+	var groupB int64
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO groups (
+			college_id,
+			name,
+			description,
+			created_by
+		)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id
+	`,
+		collegeB,
+		"Feature 19 Other College Group",
+		"Feature 19 cross-tenant test group",
+		studentB,
+	).Scan(&groupB)
+
+	if err != nil {
+		t.Fatalf("create feature 19 other-college group: %v", err)
+	}
+
+	var subgroupB int64
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO subgroups (
+			college_id,
+			group_id,
+			name,
+			description,
+			created_by
+		)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id
+	`,
+		collegeB,
+		groupB,
+		"Feature 19 Other College Subgroup",
+		"Feature 19 cross-tenant test subgroup",
+		studentB,
+	).Scan(&subgroupB)
+
+	if err != nil {
+		t.Fatalf("create feature 19 other-college subgroup: %v", err)
+	}
+
+	// Document in another college must never leak.
+	createDocumentTestDocument(
+		t,
+		ctx,
+		tx,
+		collegeB,
+		studentB,
+		&subgroupB,
+		"other-college.pdf",
+		"application/pdf",
+		300,
+	)
+
+	// Deleted subgroup document must not be returned.
+	deletedDocumentID := createDocumentTestDocument(
+		t,
+		ctx,
+		tx,
+		collegeA,
+		studentA,
+		&subgroupA,
+		"deleted.pdf",
+		"application/pdf",
+		400,
+	)
+
+	_, err = tx.Exec(ctx, `
+		UPDATE documents
+		SET
+			deleted_at = NOW(),
+			deleted_by = $1
+		WHERE id = $2
+		  AND college_id = $3
+	`,
+		studentA,
+		deletedDocumentID,
+		collegeA,
+	)
+
+	if err != nil {
+		t.Fatalf("delete feature 19 document: %v", err)
+	}
+
+	// Use the service directly with the test transaction.
+	service := NewService(tx)
+
+	// College admin can list subgroup documents.
+	documents, err := service.ListSubgroupDocuments(
+		ctx,
+		collegeA,
+		adminA,
+		"college_admin",
+		groupA,
+		subgroupA,
+	)
+
+	if err != nil {
+		t.Fatalf("admin list subgroup documents: %v", err)
+	}
+
+	if len(documents) != 2 {
+		t.Fatalf(
+			"expected 2 active subgroup documents for admin, got %d",
+			len(documents),
+		)
+	}
+
+	// Newest document must appear first.
+	if documents[0].ID != secondDocumentID {
+		t.Errorf(
+			"expected newest document ID %d first, got %d",
+			secondDocumentID,
+			documents[0].ID,
+		)
+	}
+
+	if documents[1].ID != firstDocumentID {
+		t.Errorf(
+			"expected older document ID %d second, got %d",
+			firstDocumentID,
+			documents[1].ID,
+		)
+	}
+
+	// Faculty who belongs to the group can list documents.
+	documents, err = service.ListSubgroupDocuments(
+		ctx,
+		collegeA,
+		facultyMember,
+		"faculty",
+		groupA,
+		subgroupA,
+	)
+
+	if err != nil {
+		t.Fatalf("member faculty list subgroup documents: %v", err)
+	}
+
+	if len(documents) != 2 {
+		t.Fatalf(
+			"expected 2 subgroup documents for member faculty, got %d",
+			len(documents),
+		)
+	}
+
+	// Faculty who does not belong to the group must be forbidden.
+	_, err = service.ListSubgroupDocuments(
+		ctx,
+		collegeA,
+		facultyNonMember,
+		"faculty",
+		groupA,
+		subgroupA,
+	)
+
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf(
+			"expected ErrForbidden for non-member faculty, got %v",
+			err,
+		)
+	}
+
+	// Students must be forbidden.
+	_, err = service.ListSubgroupDocuments(
+		ctx,
+		collegeA,
+		studentA,
+		"student",
+		groupA,
+		subgroupA,
+	)
+
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf(
+			"expected ErrForbidden for student, got %v",
+			err,
+		)
+	}
+
+	// A subgroup from another group must not be accessible.
+	otherGroupID := int64(0)
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO groups (
+			college_id,
+			name,
+			description,
+			created_by
+		)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id
+	`,
+		collegeA,
+		"Feature 19 Other Group",
+		"Feature 19 authorization test",
+		adminA,
+	).Scan(&otherGroupID)
+
+	if err != nil {
+		t.Fatalf("create feature 19 other group: %v", err)
+	}
+
+	_, err = service.ListSubgroupDocuments(
+		ctx,
+		collegeA,
+		adminA,
+		"college_admin",
+		otherGroupID,
+		subgroupA,
+	)
+
+	if !errors.Is(err, ErrDocumentNotFound) {
+		t.Fatalf(
+			"expected ErrDocumentNotFound for mismatched group/subgroup, got %v",
+			err,
+		)
 	}
 }

@@ -68,6 +68,19 @@ type ServiceInterface interface {
 	PreviewService
 }
 
+// SubgroupDocumentListService defines the operation for listing
+// documents stored in a subgroup.
+type SubgroupDocumentListService interface {
+	ListSubgroupDocuments(
+		ctx context.Context,
+		collegeID int64,
+		actorID int64,
+		actorRole string,
+		groupID int64,
+		subgroupID int64,
+	) ([]Document, error)
+}
+
 type Handler struct {
 	service ServiceInterface
 }
@@ -83,6 +96,12 @@ func (h *Handler) ServeHTTP(
 	r *http.Request,
 ) {
 	switch {
+	case r.Method == http.MethodGet &&
+		r.PathValue("group_id") != "" &&
+		r.PathValue("subgroup_id") != "" &&
+		strings.HasSuffix(r.URL.Path, "/documents"):
+		h.ListSubgroupDocuments(w, r)
+
 	case r.Method == http.MethodGet &&
 		r.URL.Path == "/documents":
 		h.listPersonalVault(w, r)
@@ -647,6 +666,63 @@ func writeJSON(
 	w.WriteHeader(status)
 
 	if err := json.NewEncoder(w).Encode(value); err != nil {
+		return
+	}
+}
+
+func (h *Handler) ListSubgroupDocuments(w http.ResponseWriter, r *http.Request) {
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if claims.Role != "college_admin" && claims.Role != "faculty" {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	groupID, err := strconv.ParseInt(r.PathValue("group_id"), 10, 64)
+	if err != nil || groupID <= 0 {
+		http.Error(w, "invalid group id", http.StatusBadRequest)
+		return
+	}
+
+	subgroupID, err := strconv.ParseInt(r.PathValue("subgroup_id"), 10, 64)
+	if err != nil || subgroupID <= 0 {
+		http.Error(w, "invalid subgroup id", http.StatusBadRequest)
+		return
+	}
+
+	subgroupDocumentService, ok := h.service.(SubgroupDocumentListService)
+	if !ok {
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	documents, err := subgroupDocumentService.ListSubgroupDocuments(
+		r.Context(),
+		claims.CollegeID,
+		claims.UserID,
+		claims.Role,
+		groupID,
+		subgroupID,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrForbidden):
+			http.Error(w, "forbidden", http.StatusForbidden)
+		case errors.Is(err, ErrDocumentNotFound):
+			http.Error(w, "subgroup not found", http.StatusNotFound)
+		case errors.Is(err, ErrInvalidInput):
+			http.Error(w, "invalid input", http.StatusBadRequest)
+		default:
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	if err := json.NewEncoder(w).Encode(documents); err != nil {
 		return
 	}
 }

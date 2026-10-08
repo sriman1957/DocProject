@@ -225,6 +225,14 @@ func run() error {
 	)
 
 	mux.Handle(
+		"GET /groups/{group_id}/subgroups/{subgroup_id}/documents",
+		auth.AuthMiddleware(
+			tokenService,
+			documentsHandler,
+		),
+	)
+
+	mux.Handle(
 		"/documents/",
 		auth.AuthMiddleware(
 			tokenService,
