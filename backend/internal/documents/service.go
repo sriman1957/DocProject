@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"docproject/backend/internal/accessperiods"
 )
 
 var (
@@ -31,9 +33,21 @@ type Querier interface {
 	) pgx.Row
 }
 
+type SubgroupAccessAuthorizer interface {
+	AuthorizeStudentAccess(
+		ctx context.Context,
+		collegeID int64,
+		studentID int64,
+		groupID int64,
+		subgroupID int64,
+		at string,
+	) error
+}
+
 type Service struct {
-	db      Querier
-	storage Storage
+	db         Querier
+	storage    Storage
+	authorizer SubgroupAccessAuthorizer
 }
 
 func NewService(database Querier) *Service {
@@ -49,6 +63,18 @@ func NewServiceWithStorage(
 	return &Service{
 		db:      database,
 		storage: storage,
+	}
+}
+
+func NewServiceWithStorageAndAuthorizer(
+	database Querier,
+	storage Storage,
+	authorizer SubgroupAccessAuthorizer,
+) *Service {
+	return &Service{
+		db:         database,
+		storage:    storage,
+		authorizer: authorizer,
 	}
 }
 
@@ -343,6 +369,276 @@ func (s *Service) CreatePersonalVaultDocument(
 	}
 
 	return document, nil
+}
+
+// CopyPersonalVaultDocument creates a separate physical copy of a
+// student's Personal Vault document in an authorized subgroup.
+// The original document remains unchanged.
+func (s *Service) CopyPersonalVaultDocument(
+	ctx context.Context,
+	collegeID int64,
+	studentID int64,
+	documentID int64,
+	groupID int64,
+	subgroupID int64,
+) (UploadedDocument, error) {
+	if collegeID <= 0 ||
+		studentID <= 0 ||
+		documentID <= 0 ||
+		groupID <= 0 ||
+		subgroupID <= 0 {
+		return UploadedDocument{}, ErrInvalidInput
+	}
+
+	if s.storage == nil {
+		return UploadedDocument{}, errors.New(
+			"document storage is not configured",
+		)
+	}
+
+	if s.authorizer == nil {
+		return UploadedDocument{}, errors.New(
+			"subgroup access authorizer is not configured",
+		)
+	}
+
+	// Confirm that the source belongs to this student and is an
+	// active Personal Vault document, not an existing subgroup copy.
+	const sourceQuery = `
+		SELECT
+			original_filename,
+			storage_key,
+			mime_type,
+			file_size_bytes,
+			sha256
+		FROM documents
+		WHERE id = $1
+		  AND college_id = $2
+		  AND owner_id = $3
+		  AND subgroup_id IS NULL
+		  AND deleted_at IS NULL
+	`
+
+	var (
+		filename     string
+		sourceKey    string
+		sourceMIME   string
+		sourceSHA256 string
+		sourceSize   int64
+	)
+
+	err := s.db.QueryRow(
+		ctx,
+		sourceQuery,
+		documentID,
+		collegeID,
+		studentID,
+	).Scan(
+		&filename,
+		&sourceKey,
+		&sourceMIME,
+		&sourceSize,
+		&sourceSHA256,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return UploadedDocument{}, ErrDocumentNotFound
+		}
+
+		return UploadedDocument{}, fmt.Errorf(
+			"copy personal vault document: load source: %w",
+			err,
+		)
+	}
+
+	// Verify group membership, subgroup status, and the active
+	// access period before copying any file.
+	at := time.Now().UTC().Format(time.RFC3339Nano)
+
+	err = s.authorizer.AuthorizeStudentAccess(
+		ctx,
+		collegeID,
+		studentID,
+		groupID,
+		subgroupID,
+		at,
+	)
+	if err != nil {
+		if errors.Is(err, accessperiods.ErrForbidden) ||
+			errors.Is(err, accessperiods.ErrSubgroupNotFound) {
+			return UploadedDocument{}, ErrForbidden
+		}
+
+		if errors.Is(err, accessperiods.ErrInvalidInput) {
+			return UploadedDocument{}, ErrInvalidInput
+		}
+
+		return UploadedDocument{}, fmt.Errorf(
+			"copy personal vault document: authorize subgroup access: %w",
+			err,
+		)
+	}
+
+	// Read the original file without moving or modifying it.
+	sourceFile, err := s.storage.Open(sourceKey)
+	if err != nil {
+		if errors.Is(err, ErrStorageNotFound) {
+			return UploadedDocument{}, ErrDocumentNotFound
+		}
+
+		return UploadedDocument{}, fmt.Errorf(
+			"copy personal vault document: open source: %w",
+			err,
+		)
+	}
+
+	data, readErr := io.ReadAll(
+		io.LimitReader(sourceFile, MaxUploadSize+1),
+	)
+	closeErr := sourceFile.Close()
+
+	if readErr != nil {
+		return UploadedDocument{}, fmt.Errorf(
+			"copy personal vault document: read source: %w",
+			readErr,
+		)
+	}
+
+	if closeErr != nil {
+		return UploadedDocument{}, fmt.Errorf(
+			"copy personal vault document: close source: %w",
+			closeErr,
+		)
+	}
+
+	if int64(len(data)) > MaxUploadSize {
+		return UploadedDocument{}, ErrFileTooLarge
+	}
+
+	// Revalidate the file and verify its stored metadata before
+	// creating a second document record.
+	upload, err := ValidateUpload(data)
+	if err != nil {
+		return UploadedDocument{}, err
+	}
+
+	sha256Hash := CalculateSHA256(data)
+
+	if upload.Size != sourceSize ||
+		upload.MIMEType != sourceMIME ||
+		sha256Hash != strings.TrimSpace(sourceSHA256) {
+		return UploadedDocument{}, errors.New(
+			"copy personal vault document: source metadata mismatch",
+		)
+	}
+
+	// Give the copied file its own unique storage key.
+	newStorageKey := GenerateStorageKey()
+
+	if err := s.storage.Save(
+		newStorageKey,
+		data,
+	); err != nil {
+		return UploadedDocument{}, fmt.Errorf(
+			"copy personal vault document: save copy: %w",
+			err,
+		)
+	}
+
+	// Insert the subgroup document and audit record in a single
+	// PostgreSQL statement. If either database insert fails,
+	// the statement rolls back both inserts.
+	const insertCopyQuery = `
+		WITH new_document AS (
+			INSERT INTO documents (
+				college_id,
+				owner_id,
+				subgroup_id,
+				original_filename,
+				storage_key,
+				mime_type,
+				file_size_bytes,
+				sha256,
+				copied_from_document_id
+			)
+			VALUES (
+				$1, $2, $3, $4, $5, $6, $7, $8, $9
+			)
+			RETURNING
+				id,
+				original_filename,
+				mime_type,
+				file_size_bytes,
+				sha256,
+				uploaded_at
+		),
+		new_audit AS (
+			INSERT INTO document_audit_logs (
+				document_id,
+				actor_user_id,
+				action,
+				filename
+			)
+			SELECT
+				id,
+				$2,
+				'document_copied',
+				original_filename
+			FROM new_document
+			RETURNING document_id
+		)
+		SELECT
+			d.id,
+			d.original_filename,
+			d.mime_type,
+			d.file_size_bytes,
+			d.sha256,
+			d.uploaded_at
+		FROM new_document d
+		JOIN new_audit a ON a.document_id = d.id
+	`
+
+	var copied UploadedDocument
+
+	err = s.db.QueryRow(
+		ctx,
+		insertCopyQuery,
+		collegeID,
+		studentID,
+		subgroupID,
+		filename,
+		newStorageKey,
+		upload.MIMEType,
+		upload.Size,
+		sha256Hash,
+		documentID,
+	).Scan(
+		&copied.ID,
+		&copied.OriginalFilename,
+		&copied.MIMEType,
+		&copied.FileSizeBytes,
+		&copied.SHA256,
+		&copied.UploadedAt,
+	)
+	if err != nil {
+		// The database statement is atomic. Remove the physical copy
+		// if the database insert or audit insertion fails.
+		if deleteErr := s.storage.Delete(newStorageKey); deleteErr != nil &&
+			!errors.Is(deleteErr, ErrStorageNotFound) {
+			return UploadedDocument{}, fmt.Errorf(
+				"insert copied document and audit event: %w; cleanup copied file: %v",
+				err,
+				deleteErr,
+			)
+		}
+
+		return UploadedDocument{}, fmt.Errorf(
+			"insert copied document and audit event: %w",
+			err,
+		)
+	}
+
+	return copied, nil
 }
 
 func (s *Service) insertDocument(

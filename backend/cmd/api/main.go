@@ -15,6 +15,7 @@ import (
 	"docproject/backend/db"
 	"docproject/backend/internal/accessperiods"
 	"docproject/backend/internal/auth"
+	"docproject/backend/internal/branchadmins"
 	"docproject/backend/internal/config"
 	"docproject/backend/internal/documents"
 	"docproject/backend/internal/groups"
@@ -132,6 +133,23 @@ func run() error {
 		),
 	)
 
+	// Branch admin routes
+	branchAdminsService := branchadmins.NewService(database)
+
+	branchAdminsHandler := branchadmins.NewHandler(
+		branchAdminsService,
+	)
+
+	protectedBranchAdminsHandler := auth.AuthMiddleware(
+		tokenService,
+		branchAdminsHandler,
+	)
+
+	mux.Handle(
+		"POST /branch-admins",
+		protectedBranchAdminsHandler,
+	)
+
 	// Subgroup routes
 	subgroupsService := subgroups.NewService(database)
 	subgroupsHandler := subgroups.NewHandler(
@@ -186,9 +204,10 @@ func run() error {
 	}
 
 	// Document service
-	documentsService := documents.NewServiceWithStorage(
+	documentsService := documents.NewServiceWithStorageAndAuthorizer(
 		database,
 		documentsStorage,
+		accessPeriodsService,
 	)
 
 	// Document handler

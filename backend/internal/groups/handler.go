@@ -12,6 +12,7 @@ import (
 )
 
 type createGroupRequest struct {
+	BranchID    int64  `json:"branch_id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
@@ -29,17 +30,22 @@ type groupService interface {
 		ctx context.Context,
 		collegeID int64,
 		createdBy int64,
+		role string,
 		input CreateInput,
 	) (Group, error)
 
 	List(
 		ctx context.Context,
 		collegeID int64,
+		userID int64,
+		role string,
 	) ([]Group, error)
 
 	AddMember(
 		ctx context.Context,
 		collegeID int64,
+		userID int64,
+		role string,
 		groupID int64,
 		input AddMemberInput,
 	) (Member, error)
@@ -47,6 +53,8 @@ type groupService interface {
 	ListMembers(
 		ctx context.Context,
 		collegeID int64,
+		userID int64,
+		role string,
 		groupID int64,
 	) ([]Member, error)
 }
@@ -55,7 +63,7 @@ type groupService interface {
 func NewHandler(service groupService) http.Handler {
 	mux := http.NewServeMux()
 
-	// Create a group.
+	// Create a group / batch.
 	mux.HandleFunc("POST /groups", func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := auth.ClaimsFromContext(r.Context())
 		if !ok {
@@ -65,7 +73,12 @@ func NewHandler(service groupService) http.Handler {
 			return
 		}
 
-		if claims.Role != "college_admin" {
+		// College admins and faculty users can reach the service.
+		//
+		// For faculty, the service determines whether the user is actually
+		// an active Branch Admin. Ordinary faculty users will receive 403
+		// from the service.
+		if claims.Role != "college_admin" && claims.Role != "faculty" {
 			writeJSON(w, http.StatusForbidden, errorResponse{
 				Error: "forbidden",
 			})
@@ -98,20 +111,34 @@ func NewHandler(service groupService) http.Handler {
 			r.Context(),
 			claims.CollegeID,
 			claims.UserID,
+			claims.Role,
 			CreateInput{
+				BranchID:    request.BranchID,
 				Name:        request.Name,
 				Description: request.Description,
 			},
 		)
 
-		if errors.Is(err, ErrInvalidInput) {
+		switch {
+		case errors.Is(err, ErrInvalidInput):
 			writeJSON(w, http.StatusBadRequest, errorResponse{
 				Error: "invalid group input",
 			})
 			return
-		}
 
-		if err != nil {
+		case errors.Is(err, ErrBranchNotFound):
+			writeJSON(w, http.StatusNotFound, errorResponse{
+				Error: "branch not found",
+			})
+			return
+
+		case errors.Is(err, ErrForbidden):
+			writeJSON(w, http.StatusForbidden, errorResponse{
+				Error: "forbidden",
+			})
+			return
+
+		case err != nil:
 			writeJSON(w, http.StatusInternalServerError, errorResponse{
 				Error: "internal server error",
 			})
@@ -121,7 +148,7 @@ func NewHandler(service groupService) http.Handler {
 		writeJSON(w, http.StatusCreated, group)
 	})
 
-	// List groups.
+	// List groups / batches visible to the caller.
 	mux.HandleFunc("GET /groups", func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := auth.ClaimsFromContext(r.Context())
 		if !ok {
@@ -131,7 +158,7 @@ func NewHandler(service groupService) http.Handler {
 			return
 		}
 
-		if claims.Role != "college_admin" {
+		if claims.Role != "college_admin" && claims.Role != "faculty" {
 			writeJSON(w, http.StatusForbidden, errorResponse{
 				Error: "forbidden",
 			})
@@ -141,16 +168,24 @@ func NewHandler(service groupService) http.Handler {
 		groups, err := service.List(
 			r.Context(),
 			claims.CollegeID,
+			claims.UserID,
+			claims.Role,
 		)
 
-		if errors.Is(err, ErrInvalidInput) {
+		switch {
+		case errors.Is(err, ErrInvalidInput):
 			writeJSON(w, http.StatusBadRequest, errorResponse{
 				Error: "invalid group input",
 			})
 			return
-		}
 
-		if err != nil {
+		case errors.Is(err, ErrForbidden):
+			writeJSON(w, http.StatusForbidden, errorResponse{
+				Error: "forbidden",
+			})
+			return
+
+		case err != nil:
 			writeJSON(w, http.StatusInternalServerError, errorResponse{
 				Error: "internal server error",
 			})
@@ -170,7 +205,7 @@ func NewHandler(service groupService) http.Handler {
 			return
 		}
 
-		if claims.Role != "college_admin" {
+		if claims.Role != "college_admin" && claims.Role != "faculty" {
 			writeJSON(w, http.StatusForbidden, errorResponse{
 				Error: "forbidden",
 			})
@@ -188,6 +223,8 @@ func NewHandler(service groupService) http.Handler {
 		members, err := service.ListMembers(
 			r.Context(),
 			claims.CollegeID,
+			claims.UserID,
+			claims.Role,
 			groupID,
 		)
 
@@ -201,6 +238,12 @@ func NewHandler(service groupService) http.Handler {
 		case errors.Is(err, ErrGroupNotFound):
 			writeJSON(w, http.StatusNotFound, errorResponse{
 				Error: "group not found",
+			})
+			return
+
+		case errors.Is(err, ErrForbidden):
+			writeJSON(w, http.StatusForbidden, errorResponse{
+				Error: "forbidden",
 			})
 			return
 
@@ -224,7 +267,7 @@ func NewHandler(service groupService) http.Handler {
 			return
 		}
 
-		if claims.Role != "college_admin" {
+		if claims.Role != "college_admin" && claims.Role != "faculty" {
 			writeJSON(w, http.StatusForbidden, errorResponse{
 				Error: "forbidden",
 			})
@@ -264,6 +307,8 @@ func NewHandler(service groupService) http.Handler {
 		member, err := service.AddMember(
 			r.Context(),
 			claims.CollegeID,
+			claims.UserID,
+			claims.Role,
 			groupID,
 			AddMemberInput{
 				UserID: request.UserID,
@@ -292,6 +337,12 @@ func NewHandler(service groupService) http.Handler {
 		case errors.Is(err, ErrMembershipExists):
 			writeJSON(w, http.StatusConflict, errorResponse{
 				Error: "user is already a member of this group",
+			})
+			return
+
+		case errors.Is(err, ErrForbidden):
+			writeJSON(w, http.StatusForbidden, errorResponse{
+				Error: "forbidden",
 			})
 			return
 

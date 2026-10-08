@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"docproject/backend/internal/branchadmins"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -16,6 +18,7 @@ var (
 	ErrGroupNotFound    = errors.New("group not found")
 	ErrMemberNotFound   = errors.New("group member not found")
 	ErrMembershipExists = errors.New("membership already exists")
+	ErrBranchNotFound   = errors.New("branch not found")
 )
 
 type Querier interface {
@@ -36,6 +39,7 @@ func NewService(database Querier) *Service {
 type Group struct {
 	ID          int64  `json:"id"`
 	CollegeID   int64  `json:"college_id"`
+	BranchID    int64  `json:"branch_id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	CreatedBy   int64  `json:"created_by"`
@@ -45,6 +49,7 @@ type Group struct {
 }
 
 type CreateInput struct {
+	BranchID    int64
 	Name        string
 	Description string
 }
@@ -62,16 +67,67 @@ type Member struct {
 	JoinedAt       string `json:"joined_at"`
 }
 
+// authorizeBranch verifies that the caller is allowed to manage
+// resources belonging to the specified branch.
+//
+// College admins have access to every branch in their college.
+// Faculty users only have access when they have an active
+// Branch Admin assignment for that branch.
+//
+// Students and all other roles are denied.
+func (s *Service) authorizeBranch(
+	ctx context.Context,
+	collegeID int64,
+	userID int64,
+	role string,
+	branchID int64,
+) error {
+	if collegeID <= 0 || userID <= 0 || branchID <= 0 {
+		return ErrInvalidInput
+	}
+
+	switch role {
+	case "college_admin":
+		return nil
+
+	case "faculty":
+		isBranchAdmin, err := branchadmins.IsBranchAdmin(
+			ctx,
+			s.db,
+			collegeID,
+			userID,
+			branchID,
+		)
+		if err != nil {
+			return fmt.Errorf("check branch admin authorization: %w", err)
+		}
+
+		if !isBranchAdmin {
+			return ErrForbidden
+		}
+
+		return nil
+
+	default:
+		return ErrForbidden
+	}
+}
+
+// Create creates a new batch group inside a branch.
+//
+// College admins can create a group in any active branch in their college.
+// Branch admins can create a group only in branches assigned to them.
 func (s *Service) Create(
 	ctx context.Context,
 	collegeID int64,
 	createdBy int64,
+	role string,
 	input CreateInput,
 ) (Group, error) {
 	name := strings.TrimSpace(input.Name)
 	description := strings.TrimSpace(input.Description)
 
-	if collegeID <= 0 || createdBy <= 0 {
+	if collegeID <= 0 || createdBy <= 0 || input.BranchID <= 0 {
 		return Group{}, ErrInvalidInput
 	}
 
@@ -83,17 +139,64 @@ func (s *Service) Create(
 		return Group{}, ErrInvalidInput
 	}
 
+	// Verify that the branch belongs to the caller's college
+	// and is active.
+	const branchQuery = `
+		SELECT id
+		FROM branches
+		WHERE id = $1
+		  AND college_id = $2
+		  AND is_active = TRUE
+	`
+
+	var branchID int64
+
+	err := s.db.QueryRow(
+		ctx,
+		branchQuery,
+		input.BranchID,
+		collegeID,
+	).Scan(&branchID)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Group{}, ErrBranchNotFound
+	}
+
+	if err != nil {
+		return Group{}, fmt.Errorf("check branch: %w", err)
+	}
+
+	// Authorization is checked only after confirming that the branch
+	// belongs to the caller's college.
+	if err := s.authorizeBranch(
+		ctx,
+		collegeID,
+		createdBy,
+		role,
+		branchID,
+	); err != nil {
+		return Group{}, err
+	}
+
 	const query = `
 		INSERT INTO groups (
 			college_id,
+			branch_id,
 			name,
 			description,
 			created_by
 		)
-		VALUES ($1, $2, NULLIF($3, ''), $4)
+		VALUES (
+			$1,
+			$2,
+			$3,
+			NULLIF($4, ''),
+			$5
+		)
 		RETURNING
 			id,
 			college_id,
+			branch_id,
 			name,
 			COALESCE(description, ''),
 			created_by,
@@ -104,16 +207,18 @@ func (s *Service) Create(
 
 	var group Group
 
-	err := s.db.QueryRow(
+	err = s.db.QueryRow(
 		ctx,
 		query,
 		collegeID,
+		input.BranchID,
 		name,
 		description,
 		createdBy,
 	).Scan(
 		&group.ID,
 		&group.CollegeID,
+		&group.BranchID,
 		&group.Name,
 		&group.Description,
 		&group.CreatedBy,
@@ -121,6 +226,7 @@ func (s *Service) Create(
 		&group.CreatedAt,
 		&group.UpdatedAt,
 	)
+
 	if err != nil {
 		return Group{}, fmt.Errorf("create group: %w", err)
 	}
@@ -128,31 +234,88 @@ func (s *Service) Create(
 	return group, nil
 }
 
+// List returns all active groups the caller is authorized to see.
+//
+// College admins can see every active group in their college.
+// Branch admins can only see groups belonging to their assigned branches.
 func (s *Service) List(
 	ctx context.Context,
 	collegeID int64,
+	userID int64,
+	role string,
 ) ([]Group, error) {
-	if collegeID <= 0 {
+	if collegeID <= 0 || userID <= 0 {
 		return nil, ErrInvalidInput
 	}
 
-	const query = `
-		SELECT
-			id,
-			college_id,
-			name,
-			COALESCE(description, ''),
-			created_by,
-			is_active,
-			created_at::text,
-			updated_at::text
-		FROM groups
-		WHERE college_id = $1
-		  AND is_active = TRUE
-		ORDER BY created_at DESC, id DESC
-	`
+	switch role {
+	case "college_admin":
+		// No branch restriction.
 
-	rows, err := s.db.Query(ctx, query, collegeID)
+	case "faculty":
+		// Authorization is enforced directly in the query below.
+
+	default:
+		return nil, ErrForbidden
+	}
+
+	var query string
+	var args []any
+
+	if role == "college_admin" {
+		query = `
+			SELECT
+				id,
+				college_id,
+				branch_id,
+				name,
+				COALESCE(description, ''),
+				created_by,
+				is_active,
+				created_at::text,
+				updated_at::text
+			FROM groups
+			WHERE college_id = $1
+			  AND is_active = TRUE
+			ORDER BY created_at DESC, id DESC
+		`
+
+		args = []any{
+			collegeID,
+		}
+	} else {
+		query = `
+			SELECT
+				g.id,
+				g.college_id,
+				g.branch_id,
+				g.name,
+				COALESCE(g.description, ''),
+				g.created_by,
+				g.is_active,
+				g.created_at::text,
+				g.updated_at::text
+			FROM groups g
+			WHERE g.college_id = $1
+			  AND g.is_active = TRUE
+			  AND EXISTS (
+				  SELECT 1
+				  FROM branch_admin_assignments baa
+				  WHERE baa.college_id = g.college_id
+				    AND baa.branch_id = g.branch_id
+				    AND baa.user_id = $2
+				    AND baa.is_active = TRUE
+			  )
+			ORDER BY g.created_at DESC, g.id DESC
+		`
+
+		args = []any{
+			collegeID,
+			userID,
+		}
+	}
+
+	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list groups: query: %w", err)
 	}
@@ -166,6 +329,7 @@ func (s *Service) List(
 		if err := rows.Scan(
 			&group.ID,
 			&group.CollegeID,
+			&group.BranchID,
 			&group.Name,
 			&group.Description,
 			&group.CreatedBy,
@@ -186,21 +350,28 @@ func (s *Service) List(
 	return groups, nil
 }
 
-// ListMembers returns the members of an active group belonging
-// to the specified college.
+// ListMembers returns the members of an active group.
+//
+// Access is determined from the group's branch:
+//   - college_admin: any branch in their college
+//   - faculty: only if they are an active Branch Admin for that branch
 func (s *Service) ListMembers(
 	ctx context.Context,
 	collegeID int64,
+	userID int64,
+	role string,
 	groupID int64,
 ) ([]Member, error) {
-	if collegeID <= 0 || groupID <= 0 {
+	if collegeID <= 0 || userID <= 0 || groupID <= 0 {
 		return nil, ErrInvalidInput
 	}
 
-	// Verify that the group exists, is active, and belongs
-	// to the authenticated user's college.
+	// Resolve the group's branch while simultaneously enforcing
+	// college isolation.
 	const groupQuery = `
-		SELECT id
+		SELECT
+			id,
+			branch_id
 		FROM groups
 		WHERE id = $1
 		  AND college_id = $2
@@ -208,13 +379,17 @@ func (s *Service) ListMembers(
 	`
 
 	var foundGroupID int64
+	var branchID int64
 
 	err := s.db.QueryRow(
 		ctx,
 		groupQuery,
 		groupID,
 		collegeID,
-	).Scan(&foundGroupID)
+	).Scan(
+		&foundGroupID,
+		&branchID,
+	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrGroupNotFound
@@ -222,6 +397,16 @@ func (s *Service) ListMembers(
 
 	if err != nil {
 		return nil, fmt.Errorf("list group members: check group: %w", err)
+	}
+
+	if err := s.authorizeBranch(
+		ctx,
+		collegeID,
+		userID,
+		role,
+		branchID,
+	); err != nil {
+		return nil, err
 	}
 
 	const membersQuery = `
@@ -278,19 +463,29 @@ func (s *Service) ListMembers(
 	return members, nil
 }
 
+// AddMember adds an active student or faculty user to an active group.
+//
+// The caller must be:
+//   - a college admin in the same college, or
+//   - a Branch Admin assigned to the group's branch.
 func (s *Service) AddMember(
 	ctx context.Context,
 	collegeID int64,
+	userID int64,
+	role string,
 	groupID int64,
 	input AddMemberInput,
 ) (Member, error) {
-	if collegeID <= 0 || groupID <= 0 || input.UserID <= 0 {
+	if collegeID <= 0 || userID <= 0 || groupID <= 0 || input.UserID <= 0 {
 		return Member{}, ErrInvalidInput
 	}
 
-	// Verify that the group belongs to this college and is active.
+	// Verify that the group belongs to this college, is active,
+	// and determine its branch.
 	const groupQuery = `
-		SELECT id
+		SELECT
+			id,
+			branch_id
 		FROM groups
 		WHERE id = $1
 		  AND college_id = $2
@@ -298,13 +493,17 @@ func (s *Service) AddMember(
 	`
 
 	var foundGroupID int64
+	var branchID int64
 
 	err := s.db.QueryRow(
 		ctx,
 		groupQuery,
 		groupID,
 		collegeID,
-	).Scan(&foundGroupID)
+	).Scan(
+		&foundGroupID,
+		&branchID,
+	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Member{}, ErrGroupNotFound
@@ -312,6 +511,16 @@ func (s *Service) AddMember(
 
 	if err != nil {
 		return Member{}, fmt.Errorf("check group: %w", err)
+	}
+
+	if err := s.authorizeBranch(
+		ctx,
+		collegeID,
+		userID,
+		role,
+		branchID,
+	); err != nil {
+		return Member{}, err
 	}
 
 	// Only active students and faculty from the same college can join.

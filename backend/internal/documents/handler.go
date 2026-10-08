@@ -48,6 +48,19 @@ type PreviewService interface {
 	) (io.ReadCloser, Document, error)
 }
 
+// CopyService defines the operation for copying a Personal Vault
+// document into a subgroup.
+type CopyService interface {
+	CopyPersonalVaultDocument(
+		ctx context.Context,
+		collegeID int64,
+		studentID int64,
+		documentID int64,
+		groupID int64,
+		subgroupID int64,
+	) (UploadedDocument, error)
+}
+
 type ServiceInterface interface {
 	ListService
 	GetService
@@ -77,6 +90,11 @@ func (h *Handler) ServeHTTP(
 	case r.Method == http.MethodGet &&
 		strings.HasSuffix(r.URL.Path, "/preview"):
 		h.previewPersonalVaultDocument(w, r)
+
+	case r.Method == http.MethodPost &&
+		strings.HasPrefix(r.URL.Path, "/documents/") &&
+		strings.HasSuffix(r.URL.Path, "/copy"):
+		h.copyPersonalVaultDocument(w, r)
 
 	case r.Method == http.MethodGet &&
 		strings.HasPrefix(r.URL.Path, "/documents/"):
@@ -274,7 +292,7 @@ func (h *Handler) previewPersonalVaultDocument(
 	filename := strings.NewReplacer(
 		"\\",
 		"_",
-		"\"",
+		`"`,
 		"_",
 		"\r",
 		"_",
@@ -309,6 +327,123 @@ func (h *Handler) previewPersonalVaultDocument(
 	if _, err := io.Copy(w, file); err != nil {
 		return
 	}
+}
+
+// copyPersonalVaultDocument copies a Personal Vault document into
+// a subgroup. The original document remains in the Personal Vault.
+func (h *Handler) copyPersonalVaultDocument(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		http.Error(
+			w,
+			"unauthorized",
+			http.StatusUnauthorized,
+		)
+		return
+	}
+
+	if claims.Role != "student" {
+		http.Error(
+			w,
+			"forbidden",
+			http.StatusForbidden,
+		)
+		return
+	}
+
+	const prefix = "/documents/"
+	const suffix = "/copy"
+
+	path := r.URL.Path
+
+	if !strings.HasPrefix(path, prefix) ||
+		!strings.HasSuffix(path, suffix) {
+		http.Error(
+			w,
+			"invalid document path",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	documentIDText := strings.TrimSuffix(
+		strings.TrimPrefix(path, prefix),
+		suffix,
+	)
+
+	documentID, err := strconv.ParseInt(
+		documentIDText,
+		10,
+		64,
+	)
+	if err != nil || documentID <= 0 {
+		http.Error(
+			w,
+			"invalid document ID",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	var request struct {
+		GroupID    int64 `json:"group_id"`
+		SubgroupID int64 `json:"subgroup_id"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(
+			w,
+			"invalid request body",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	if request.GroupID <= 0 || request.SubgroupID <= 0 {
+		http.Error(
+			w,
+			"invalid group or subgroup ID",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	// Keep CopyService separate from ServiceInterface so existing
+	// service mocks don't have to implement the copy operation.
+	copyService, ok := h.service.(CopyService)
+	if !ok {
+		http.Error(
+			w,
+			"copy operation unavailable",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	document, err := copyService.CopyPersonalVaultDocument(
+		r.Context(),
+		claims.CollegeID,
+		claims.UserID,
+		documentID,
+		request.GroupID,
+		request.SubgroupID,
+	)
+	if err != nil {
+		writeDocumentServiceError(w, err)
+		return
+	}
+
+	writeJSON(
+		w,
+		http.StatusCreated,
+		document,
+	)
 }
 
 func (h *Handler) uploadPersonalVaultDocument(
@@ -346,8 +481,8 @@ func (h *Handler) uploadPersonalVaultDocument(
 		return
 	}
 
-	// Add a small amount of multipart overhead to the body limit.
-	// The actual file is still limited to MaxUploadSize by ValidateUpload.
+	// Allow multipart overhead while keeping the actual file size
+	// limited by ValidateUpload and MaxUploadSize.
 	const multipartOverhead = 1024 * 1024
 
 	r.Body = http.MaxBytesReader(

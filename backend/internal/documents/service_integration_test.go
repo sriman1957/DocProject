@@ -1,14 +1,18 @@
 package documents
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"testing"
 	"time"
 
 	"docproject/backend/db"
+	"docproject/backend/internal/accessperiods"
 	"docproject/backend/internal/config"
 
 	"github.com/jackc/pgx/v5"
@@ -544,4 +548,444 @@ func documentUniqueCode(prefix string) string {
 		prefix,
 		time.Now().UnixNano(),
 	)
+}
+
+func TestCopyPersonalVaultDocumentIntegration(t *testing.T) {
+	if os.Getenv("DOCPROJECT_INTEGRATION_TESTS") != "1" {
+		t.Skip("set DOCPROJECT_INTEGRATION_TESTS=1 to run PostgreSQL integration tests")
+	}
+
+	if os.Getenv("APP_ENV") != "test" {
+		t.Fatal("integration tests require APP_ENV=test")
+	}
+
+	if os.Getenv("DB_NAME") != "docproject_test" {
+		t.Fatal("integration tests may only run against DB_NAME=docproject_test")
+	}
+
+	port, err := strconv.ParseUint(os.Getenv("DB_PORT"), 10, 16)
+	if err != nil || port == 0 {
+		t.Fatalf("invalid DB_PORT: %q", os.Getenv("DB_PORT"))
+	}
+
+	cfg := config.Config{
+		AppEnv:     "test",
+		DBHost:     os.Getenv("DB_HOST"),
+		DBPort:     uint16(port),
+		DBName:     "docproject_test",
+		DBUser:     os.Getenv("DB_USER"),
+		DBPassword: os.Getenv("DB_PASSWORD"),
+	}
+
+	if cfg.DBHost == "" || cfg.DBUser == "" {
+		t.Fatal("DB_HOST and DB_USER must be set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	pool, err := db.New(cfg)
+	if err != nil {
+		t.Fatalf("connect to test database: %v", err)
+	}
+	defer pool.Close()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+
+	defer func() {
+		_ = tx.Rollback(context.Background())
+	}()
+
+	collegeID := createDocumentTestCollege(
+		t,
+		ctx,
+		tx,
+		"FEATURE10",
+	)
+
+	studentID := createDocumentTestUser(
+		t,
+		ctx,
+		tx,
+		collegeID,
+		"feature10-student",
+		"student",
+	)
+
+	adminID := createDocumentTestUser(
+		t,
+		ctx,
+		tx,
+		collegeID,
+		"feature10-admin",
+		"college_admin",
+	)
+
+	var groupID int64
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO groups (
+			college_id,
+			name,
+			description,
+			created_by
+		)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id
+	`,
+		collegeID,
+		"Feature 10 Group",
+		"Feature 10 integration test group",
+		adminID,
+	).Scan(&groupID)
+
+	if err != nil {
+		t.Fatalf("create feature 10 group: %v", err)
+	}
+
+	var subgroupID int64
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO subgroups (
+			college_id,
+			group_id,
+			name,
+			description,
+			created_by
+		)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id
+	`,
+		collegeID,
+		groupID,
+		"Feature 10 Subgroup",
+		"Feature 10 integration test subgroup",
+		adminID,
+	).Scan(&subgroupID)
+
+	if err != nil {
+		t.Fatalf("create feature 10 subgroup: %v", err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO group_memberships (
+			college_id,
+			group_id,
+			user_id,
+			membership_role
+		)
+		VALUES ($1, $2, $3, 'student')
+	`,
+		collegeID,
+		groupID,
+		studentID,
+	)
+
+	if err != nil {
+		t.Fatalf("create feature 10 student membership: %v", err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO subgroup_access_periods (
+			subgroup_id,
+			college_id,
+			starts_at,
+			ends_at,
+			created_by
+		)
+		VALUES (
+			$1,
+			$2,
+			NOW() - INTERVAL '1 hour',
+			NOW() + INTERVAL '1 hour',
+			$3
+		)
+	`,
+		subgroupID,
+		collegeID,
+		adminID,
+	)
+
+	if err != nil {
+		t.Fatalf("create feature 10 access period: %v", err)
+	}
+
+	storageRoot := t.TempDir()
+
+	fileStorage, err := NewFileStorage(storageRoot)
+	if err != nil {
+		t.Fatalf("create test file storage: %v", err)
+	}
+
+	sourceBytes := []byte(
+		"%PDF-1.4\nFeature 10 integration test document\n%%EOF\n",
+	)
+
+	sourceHash := fmt.Sprintf("%x", sha256.Sum256(sourceBytes))
+
+	sourceKey := fmt.Sprintf(
+		"documents/%s",
+		documentUniqueCode("feature10-source"),
+	)
+
+	if err := fileStorage.Save(sourceKey, sourceBytes); err != nil {
+		t.Fatalf("save source document: %v", err)
+	}
+
+	var sourceDocumentID int64
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO documents (
+			college_id,
+			owner_id,
+			subgroup_id,
+			original_filename,
+			storage_key,
+			mime_type,
+			file_size_bytes,
+			sha256
+		)
+		VALUES ($1, $2, NULL, $3, $4, $5, $6, $7)
+		RETURNING id
+	`,
+		collegeID,
+		studentID,
+		"feature10.pdf",
+		sourceKey,
+		"application/pdf",
+		int64(len(sourceBytes)),
+		sourceHash,
+	).Scan(&sourceDocumentID)
+
+	if err != nil {
+		t.Fatalf("create feature 10 source document: %v", err)
+	}
+
+	authorizer := accessperiods.NewService(tx)
+
+	service := NewServiceWithStorageAndAuthorizer(
+		tx,
+		fileStorage,
+		authorizer,
+	)
+
+	copiedDocument, err := service.CopyPersonalVaultDocument(
+		ctx,
+		collegeID,
+		studentID,
+		sourceDocumentID,
+		groupID,
+		subgroupID,
+	)
+
+	if err != nil {
+		t.Fatalf("copy personal vault document: %v", err)
+	}
+
+	copiedDocumentID := copiedDocument.ID
+
+	if copiedDocumentID == sourceDocumentID {
+		t.Fatal("copied document must have a different ID")
+	}
+
+	var (
+		copiedFilename       string
+		copiedStorageKey     string
+		copiedMIME           string
+		copiedSize           int64
+		copiedHash           string
+		copiedSubgroupID     *int64
+		copiedOwnerID        int64
+		copiedFromDocumentID *int64
+		copiedDeletedAt      any
+	)
+
+	err = tx.QueryRow(ctx, `
+		SELECT
+			original_filename,
+			storage_key,
+			mime_type,
+			file_size_bytes,
+			sha256,
+			subgroup_id,
+			owner_id,
+			copied_from_document_id,
+			deleted_at
+		FROM documents
+		WHERE id = $1
+	`,
+		copiedDocumentID,
+	).Scan(
+		&copiedFilename,
+		&copiedStorageKey,
+		&copiedMIME,
+		&copiedSize,
+		&copiedHash,
+		&copiedSubgroupID,
+		&copiedOwnerID,
+		&copiedFromDocumentID,
+		&copiedDeletedAt,
+	)
+
+	if err != nil {
+		t.Fatalf("query copied document: %v", err)
+	}
+
+	if copiedFilename != "feature10.pdf" {
+		t.Errorf("expected copied filename feature10.pdf, got %q", copiedFilename)
+	}
+
+	if copiedMIME != "application/pdf" {
+		t.Errorf("expected copied MIME application/pdf, got %q", copiedMIME)
+	}
+
+	if copiedSize != int64(len(sourceBytes)) {
+		t.Errorf(
+			"expected copied size %d, got %d",
+			len(sourceBytes),
+			copiedSize,
+		)
+	}
+
+	if copiedHash != sourceHash {
+		t.Errorf(
+			"expected copied SHA-256 %q, got %q",
+			sourceHash,
+			copiedHash,
+		)
+	}
+
+	if copiedOwnerID != studentID {
+		t.Errorf(
+			"expected copied owner %d, got %d",
+			studentID,
+			copiedOwnerID,
+		)
+	}
+
+	if copiedSubgroupID == nil {
+		t.Fatal("copied document must belong to subgroup")
+	}
+
+	if *copiedSubgroupID != subgroupID {
+		t.Errorf(
+			"expected copied subgroup %d, got %d",
+			subgroupID,
+			*copiedSubgroupID,
+		)
+	}
+
+	if copiedFromDocumentID == nil {
+		t.Fatal("copied_from_document_id must be populated")
+	}
+
+	if *copiedFromDocumentID != int64(sourceDocumentID) {
+		t.Errorf(
+			"expected copied_from_document_id %d, got %d",
+			sourceDocumentID,
+			*copiedFromDocumentID,
+		)
+	}
+
+	if copiedDeletedAt != nil {
+		t.Fatal("newly copied document must not be deleted")
+	}
+
+	sourceFile, err := fileStorage.Open(sourceKey)
+	if err != nil {
+		t.Fatalf("open original source file: %v", err)
+	}
+
+	defer sourceFile.Close()
+
+	actualSourceBytes, err := io.ReadAll(sourceFile)
+	if err != nil {
+		t.Fatalf("read original source file: %v", err)
+	}
+
+	if !bytes.Equal(actualSourceBytes, sourceBytes) {
+		t.Fatal("original source file was modified")
+	}
+
+	copiedFile, err := fileStorage.Open(copiedStorageKey)
+	if err != nil {
+		t.Fatalf("open copied file: %v", err)
+	}
+
+	defer copiedFile.Close()
+
+	actualCopiedBytes, err := io.ReadAll(copiedFile)
+	if err != nil {
+		t.Fatalf("read copied file: %v", err)
+	}
+
+	if !bytes.Equal(actualCopiedBytes, sourceBytes) {
+		t.Fatal("copied file contents do not match source")
+	}
+
+	var auditCount int
+
+	err = tx.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM document_audit_logs
+		WHERE document_id = $1
+		  AND actor_user_id = $2
+		  AND action = 'document_copied'
+		  AND filename = $3
+	`,
+		copiedDocumentID,
+		studentID,
+		"feature10.pdf",
+	).Scan(&auditCount)
+
+	if err != nil {
+		t.Fatalf("query copy audit record: %v", err)
+	}
+
+	if auditCount != 1 {
+		t.Fatalf(
+			"expected exactly 1 document_copied audit record, got %d",
+			auditCount,
+		)
+	}
+
+	var (
+		sourceStorageKey string
+		sourceSubgroupID *int64
+		sourceCopiedFrom *int64
+	)
+
+	err = tx.QueryRow(ctx, `
+		SELECT
+			storage_key,
+			subgroup_id,
+			copied_from_document_id
+		FROM documents
+		WHERE id = $1
+	`,
+		sourceDocumentID,
+	).Scan(
+		&sourceStorageKey,
+		&sourceSubgroupID,
+		&sourceCopiedFrom,
+	)
+
+	if err != nil {
+		t.Fatalf("query original document after copy: %v", err)
+	}
+
+	if sourceStorageKey != sourceKey {
+		t.Fatal("original document storage key changed")
+	}
+
+	if sourceSubgroupID != nil {
+		t.Fatal("original personal vault document was moved into subgroup")
+	}
+
+	if sourceCopiedFrom != nil {
+		t.Fatal("original document unexpectedly has copied_from_document_id")
+	}
 }

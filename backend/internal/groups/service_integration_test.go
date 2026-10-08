@@ -24,6 +24,7 @@ func TestServiceListIntegration(t *testing.T) {
 	if os.Getenv("APP_ENV") != "test" {
 		t.Fatal("integration tests require APP_ENV=test")
 	}
+
 	if os.Getenv("DB_NAME") != "docproject_test" {
 		t.Fatal("integration tests may only run against DB_NAME=docproject_test")
 	}
@@ -63,7 +64,10 @@ func TestServiceListIntegration(t *testing.T) {
 		_ = tx.Rollback(context.Background())
 	}()
 
+	// ---------------------------------------------------------------------
 	// Create two isolated colleges.
+	// ---------------------------------------------------------------------
+
 	var collegeA, collegeB int64
 
 	err = tx.QueryRow(ctx, `
@@ -84,26 +88,87 @@ func TestServiceListIntegration(t *testing.T) {
 		t.Fatalf("create college B: %v", err)
 	}
 
+	// ---------------------------------------------------------------------
+	// Create one branch in each college.
+	// ---------------------------------------------------------------------
+
+	branchA := createIntegrationBranch(
+		t,
+		ctx,
+		tx,
+		collegeA,
+		"Computer Science and Engineering",
+		"CSE",
+	)
+
+	branchB := createIntegrationBranch(
+		t,
+		ctx,
+		tx,
+		collegeB,
+		"Information Technology",
+		"IT",
+	)
+
+	// ---------------------------------------------------------------------
 	// Create one admin in each college.
+	// ---------------------------------------------------------------------
+
 	adminA := createIntegrationAdmin(t, ctx, tx, collegeA, "a")
-	_ = createIntegrationAdmin(t, ctx, tx, collegeB, "b")
+	adminB := createIntegrationAdmin(t, ctx, tx, collegeB, "b")
 
 	service := NewService(tx)
 
+	// ---------------------------------------------------------------------
 	// Create a group in college A through the real service.
-	created, err := service.Create(ctx, collegeA, adminA, CreateInput{
-		Name:        "Integration Active Group",
-		Description: "Created by the integration test",
-	})
+	// ---------------------------------------------------------------------
+
+	created, err := service.Create(
+		ctx,
+		collegeA,
+		adminA,
+		"college_admin",
+		CreateInput{
+			BranchID:    branchA,
+			Name:        "Integration Active Group",
+			Description: "Created by the integration test",
+		},
+	)
 	if err != nil {
 		t.Fatalf("create active group: %v", err)
 	}
 
+	if created.CollegeID != collegeA {
+		t.Errorf(
+			"expected group college ID %d, got %d",
+			collegeA,
+			created.CollegeID,
+		)
+	}
+
+	if created.BranchID != branchA {
+		t.Errorf(
+			"expected group branch ID %d, got %d",
+			branchA,
+			created.BranchID,
+		)
+	}
+
+	// ---------------------------------------------------------------------
 	// A newly created group should return an empty member list.
-	emptyMembers, err := service.ListMembers(ctx, collegeA, created.ID)
+	// ---------------------------------------------------------------------
+
+	emptyMembers, err := service.ListMembers(
+		ctx,
+		collegeA,
+		adminA,
+		"college_admin",
+		created.ID,
+	)
 	if err != nil {
 		t.Fatalf("list members of empty group: %v", err)
 	}
+
 	if len(emptyMembers) != 0 {
 		t.Fatalf(
 			"expected 0 members in empty group, got %d",
@@ -111,43 +176,83 @@ func TestServiceListIntegration(t *testing.T) {
 		)
 	}
 
+	// ---------------------------------------------------------------------
 	// Create an inactive group directly.
+	// ---------------------------------------------------------------------
+
 	_, err = tx.Exec(ctx, `
 		INSERT INTO groups (
 			college_id,
+			branch_id,
 			name,
 			description,
 			created_by,
 			is_active
 		)
-		VALUES ($1, 'Integration Inactive Group', '', $2, FALSE)
-	`, collegeA, adminA)
+		VALUES ($1, $2, 'Integration Inactive Group', '', $3, FALSE)
+	`,
+		collegeA,
+		branchA,
+		adminA,
+	)
 	if err != nil {
 		t.Fatalf("create inactive group: %v", err)
 	}
 
+	// ---------------------------------------------------------------------
 	// Listing college A should return only its active group.
-	groupsA, err := service.List(ctx, collegeA)
+	// ---------------------------------------------------------------------
+
+	groupsA, err := service.List(
+		ctx,
+		collegeA,
+		adminA,
+		"college_admin",
+	)
 	if err != nil {
 		t.Fatalf("list college A groups: %v", err)
 	}
+
 	if len(groupsA) != 1 {
-		t.Fatalf("college A: expected 1 active group, got %d", len(groupsA))
-	}
-	if groupsA[0].ID != created.ID {
-		t.Errorf("expected group ID %d, got %d", created.ID, groupsA[0].ID)
+		t.Fatalf(
+			"college A: expected 1 active group, got %d",
+			len(groupsA),
+		)
 	}
 
+	if groupsA[0].ID != created.ID {
+		t.Errorf(
+			"expected group ID %d, got %d",
+			created.ID,
+			groupsA[0].ID,
+		)
+	}
+
+	// ---------------------------------------------------------------------
 	// Listing college B must not reveal college A's group.
-	groupsB, err := service.List(ctx, collegeB)
+	// ---------------------------------------------------------------------
+
+	groupsB, err := service.List(
+		ctx,
+		collegeB,
+		adminB,
+		"college_admin",
+	)
 	if err != nil {
 		t.Fatalf("list college B groups: %v", err)
 	}
+
 	if len(groupsB) != 0 {
-		t.Errorf("college B: expected 0 groups, got %d", len(groupsB))
+		t.Errorf(
+			"college B: expected 0 groups, got %d",
+			len(groupsB),
+		)
 	}
 
+	// ---------------------------------------------------------------------
 	// Create a student in college A.
+	// ---------------------------------------------------------------------
+
 	var studentID int64
 
 	err = tx.QueryRow(ctx, `
@@ -173,7 +278,10 @@ func TestServiceListIntegration(t *testing.T) {
 		t.Fatalf("create integration student: %v", err)
 	}
 
+	// ---------------------------------------------------------------------
 	// Add the student to the group.
+	// ---------------------------------------------------------------------
+
 	_, err = tx.Exec(ctx, `
 		INSERT INTO group_memberships (
 			college_id,
@@ -182,19 +290,34 @@ func TestServiceListIntegration(t *testing.T) {
 			membership_role
 		)
 		VALUES ($1, $2, $3, 'student')
-	`, collegeA, created.ID, studentID)
+	`,
+		collegeA,
+		created.ID,
+		studentID,
+	)
 	if err != nil {
 		t.Fatalf("add student to group: %v", err)
 	}
 
+	// ---------------------------------------------------------------------
 	// Listing members should return the student.
-	members, err := service.ListMembers(ctx, collegeA, created.ID)
+	// ---------------------------------------------------------------------
+
+	members, err := service.ListMembers(
+		ctx,
+		collegeA,
+		adminA,
+		"college_admin",
+		created.ID,
+	)
 	if err != nil {
 		t.Fatalf("list group members: %v", err)
 	}
+
 	if len(members) != 1 {
 		t.Fatalf("expected 1 member, got %d", len(members))
 	}
+
 	if members[0].UserID != studentID {
 		t.Errorf(
 			"expected member user ID %d, got %d",
@@ -203,8 +326,17 @@ func TestServiceListIntegration(t *testing.T) {
 		)
 	}
 
+	// ---------------------------------------------------------------------
 	// College B must not be able to access college A's group members.
-	_, err = service.ListMembers(ctx, collegeB, created.ID)
+	// ---------------------------------------------------------------------
+
+	_, err = service.ListMembers(
+		ctx,
+		collegeB,
+		adminB,
+		"college_admin",
+		created.ID,
+	)
 	if err != ErrGroupNotFound {
 		t.Errorf(
 			"expected ErrGroupNotFound for cross-college access, got %v",
@@ -212,8 +344,17 @@ func TestServiceListIntegration(t *testing.T) {
 		)
 	}
 
+	// ---------------------------------------------------------------------
 	// Invalid IDs should be rejected.
-	_, err = service.ListMembers(ctx, 0, created.ID)
+	// ---------------------------------------------------------------------
+
+	_, err = service.ListMembers(
+		ctx,
+		0,
+		adminA,
+		"college_admin",
+		created.ID,
+	)
 	if err != ErrInvalidInput {
 		t.Errorf(
 			"expected ErrInvalidInput for college ID 0, got %v",
@@ -221,7 +362,13 @@ func TestServiceListIntegration(t *testing.T) {
 		)
 	}
 
-	_, err = service.ListMembers(ctx, collegeA, 0)
+	_, err = service.ListMembers(
+		ctx,
+		collegeA,
+		adminA,
+		"college_admin",
+		0,
+	)
 	if err != ErrInvalidInput {
 		t.Errorf(
 			"expected ErrInvalidInput for group ID 0, got %v",
@@ -229,11 +376,94 @@ func TestServiceListIntegration(t *testing.T) {
 		)
 	}
 
+	// ---------------------------------------------------------------------
 	// Invalid tenant IDs should be rejected by List as well.
-	_, err = service.List(ctx, 0)
+	// ---------------------------------------------------------------------
+
+	_, err = service.List(
+		ctx,
+		0,
+		adminA,
+		"college_admin",
+	)
 	if err != ErrInvalidInput {
-		t.Errorf("expected ErrInvalidInput for college ID 0, got %v", err)
+		t.Errorf(
+			"expected ErrInvalidInput for college ID 0, got %v",
+			err,
+		)
 	}
+
+	// ---------------------------------------------------------------------
+	// Invalid caller IDs should also be rejected.
+	// ---------------------------------------------------------------------
+
+	_, err = service.List(
+		ctx,
+		collegeA,
+		0,
+		"college_admin",
+	)
+	if err != ErrInvalidInput {
+		t.Errorf(
+			"expected ErrInvalidInput for user ID 0, got %v",
+			err,
+		)
+	}
+
+	// ---------------------------------------------------------------------
+	// Branch isolation check:
+	// College A admin cannot create a group in College B's branch.
+	// ---------------------------------------------------------------------
+
+	_, err = service.Create(
+		ctx,
+		collegeA,
+		adminA,
+		"college_admin",
+		CreateInput{
+			BranchID: branchB,
+			Name:     "Should Not Be Created",
+		},
+	)
+	if err != ErrBranchNotFound {
+		t.Errorf(
+			"expected ErrBranchNotFound for foreign-college branch, got %v",
+			err,
+		)
+	}
+}
+
+func createIntegrationBranch(
+	t *testing.T,
+	ctx context.Context,
+	tx pgx.Tx,
+	collegeID int64,
+	name string,
+	code string,
+) int64 {
+	t.Helper()
+
+	var branchID int64
+
+	err := tx.QueryRow(ctx, `
+		INSERT INTO branches (
+			college_id,
+			name,
+			code
+		)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`,
+		collegeID,
+		name,
+		code+"_"+uniqueCode("branch"),
+	).Scan(&branchID)
+
+	if err != nil {
+		t.Fatalf("create integration branch: %v", err)
+	}
+
+	return branchID
 }
 
 func createIntegrationAdmin(
@@ -246,6 +476,7 @@ func createIntegrationAdmin(
 	t.Helper()
 
 	var userID int64
+
 	email := fmt.Sprintf(
 		"%s-%s@integration.docproject.local",
 		suffix,
