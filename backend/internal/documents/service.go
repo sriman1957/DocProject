@@ -481,6 +481,27 @@ func (s *Service) PreviewSubgroupDocument(
 	return file, document, nil
 }
 
+// DownloadSubgroupDocument opens an authorized document for download.
+func (s *Service) DownloadSubgroupDocument(
+	ctx context.Context,
+	collegeID int64,
+	actorID int64,
+	actorRole string,
+	groupID int64,
+	subgroupID int64,
+	documentID int64,
+) (io.ReadCloser, Document, error) {
+	return s.PreviewSubgroupDocument(
+		ctx,
+		collegeID,
+		actorID,
+		actorRole,
+		groupID,
+		subgroupID,
+		documentID,
+	)
+}
+
 func (s *Service) GetPersonalVaultDocument(
 	ctx context.Context,
 	collegeID int64,

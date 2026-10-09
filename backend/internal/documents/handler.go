@@ -93,6 +93,18 @@ type SubgroupDocumentPreviewService interface {
 	) (io.ReadCloser, Document, error)
 }
 
+type SubgroupDocumentDownloadService interface {
+	DownloadSubgroupDocument(
+		ctx context.Context,
+		collegeID int64,
+		actorID int64,
+		actorRole string,
+		groupID int64,
+		subgroupID int64,
+		documentID int64,
+	) (io.ReadCloser, Document, error)
+}
+
 type Handler struct {
 	service ServiceInterface
 }
@@ -123,6 +135,12 @@ func (h *Handler) ServeHTTP(
 		r.PathValue("subgroup_id") != "" &&
 		strings.HasSuffix(r.URL.Path, "/preview"):
 		h.previewSubgroupDocument(w, r)
+
+	case r.Method == http.MethodGet &&
+		r.PathValue("group_id") != "" &&
+		r.PathValue("subgroup_id") != "" &&
+		strings.HasSuffix(r.URL.Path, "/download"):
+		h.downloadSubgroupDocument(w, r)
 
 	case r.Method == http.MethodGet &&
 		strings.HasSuffix(r.URL.Path, "/preview"):
@@ -530,6 +548,86 @@ func (h *Handler) previewSubgroupDocument(
 	if _, err := io.Copy(w, file); err != nil {
 		return
 	}
+}
+
+func (h *Handler) downloadSubgroupDocument(w http.ResponseWriter, r *http.Request) {
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if claims.Role != "college_admin" && claims.Role != "faculty" {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	groupID, err := strconv.ParseInt(r.PathValue("group_id"), 10, 64)
+	if err != nil || groupID <= 0 {
+		http.Error(w, "invalid group ID", http.StatusBadRequest)
+		return
+	}
+
+	subgroupID, err := strconv.ParseInt(r.PathValue("subgroup_id"), 10, 64)
+	if err != nil || subgroupID <= 0 {
+		http.Error(w, "invalid subgroup ID", http.StatusBadRequest)
+		return
+	}
+
+	documentID, err := strconv.ParseInt(r.PathValue("document_id"), 10, 64)
+	if err != nil || documentID <= 0 {
+		http.Error(w, "invalid document ID", http.StatusBadRequest)
+		return
+	}
+
+	service, ok := h.service.(SubgroupDocumentDownloadService)
+	if !ok {
+		http.Error(w, "document download is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	file, document, err := service.DownloadSubgroupDocument(
+		r.Context(),
+		claims.CollegeID,
+		claims.UserID,
+		claims.Role,
+		groupID,
+		subgroupID,
+		documentID,
+	)
+
+	if err != nil {
+		writeDocumentServiceError(w, err)
+		return
+	}
+
+	if file == nil {
+		http.Error(
+			w,
+			"document file is unavailable",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	defer file.Close()
+
+	filename := strings.NewReplacer(
+		"\\", "_",
+		`"`, "_",
+		"\r", "_",
+		"\n", "_",
+	).Replace(document.OriginalFilename)
+	if filename == "" {
+		filename = "document"
+	}
+
+	w.Header().Set("Content-Type", document.MIMEType)
+	w.Header().Set("Content-Length", strconv.FormatInt(document.FileSizeBytes, 10))
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, file)
 }
 
 // copyPersonalVaultDocument copies a Personal Vault document into

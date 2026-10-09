@@ -64,6 +64,16 @@ type handlerTestService struct {
 		subgroupID int64,
 		documentID int64,
 	) (io.ReadCloser, Document, error)
+
+	subgroupDownloadFn func(
+		ctx context.Context,
+		collegeID int64,
+		actorID int64,
+		actorRole string,
+		groupID int64,
+		subgroupID int64,
+		documentID int64,
+	) (io.ReadCloser, Document, error)
 }
 
 func (s *handlerTestService) ListPersonalVault(
@@ -196,6 +206,32 @@ func (s *handlerTestService) PreviewSubgroupDocument(
 	)
 }
 
+func (s *handlerTestService) DownloadSubgroupDocument(
+	ctx context.Context,
+	collegeID int64,
+	actorID int64,
+	actorRole string,
+	groupID int64,
+	subgroupID int64,
+	documentID int64,
+) (io.ReadCloser, Document, error) {
+	if s.subgroupDownloadFn == nil {
+		return nil, Document{}, errors.New(
+			"subgroup download function not configured",
+		)
+	}
+
+	return s.subgroupDownloadFn(
+		ctx,
+		collegeID,
+		actorID,
+		actorRole,
+		groupID,
+		subgroupID,
+		documentID,
+	)
+}
+
 func newDocumentTestTokenService() *auth.TokenService {
 	return auth.NewTokenService(
 		"01234567890123456789012345678901",
@@ -273,6 +309,14 @@ func makeSubgroupPreviewAuthenticatedRequest(
 
 	req.SetPathValue("group_id", groupID)
 	req.SetPathValue("subgroup_id", subgroupID)
+
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "documents" {
+			req.SetPathValue("document_id", parts[i+1])
+			break
+		}
+	}
 
 	req.Header.Set(
 		"Authorization",
@@ -2525,6 +2569,112 @@ func TestPreviewSubgroupDocumentHandlerServiceError(t *testing.T) {
 		t.Fatalf(
 			"expected status 500, got %d",
 			recorder.Code,
+		)
+	}
+}
+
+func TestDownloadSubgroupDocumentHandlerSuccess(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("%PDF-1.7\nsubgroup certificate contents")
+
+	service := &handlerTestService{
+		subgroupDownloadFn: func(
+			ctx context.Context,
+			collegeID int64,
+			actorID int64,
+			actorRole string,
+			groupID int64,
+			subgroupID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			if collegeID != 7 || actorID != 42 {
+				t.Errorf("unexpected college or actor ID")
+			}
+			if actorRole != "faculty" {
+				t.Errorf("expected faculty role, got %s", actorRole)
+			}
+			if groupID != 10 || subgroupID != 20 || documentID != 100 {
+				t.Errorf("unexpected group, subgroup, or document ID")
+			}
+
+			return io.NopCloser(bytes.NewReader(data)), Document{
+				ID:               100,
+				OriginalFilename: "internship-certificate.pdf",
+				MIMEType:         "application/pdf",
+				FileSizeBytes:    int64(len(data)),
+			}, nil
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeSubgroupPreviewAuthenticatedRequest(
+		t,
+		handler,
+		"/groups/10/subgroups/20/documents/100/download",
+		"faculty",
+		"10",
+		"20",
+	)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d. Body: %s",
+			recorder.Code, recorder.Body.String())
+	}
+
+	if got := recorder.Header().Get("Content-Type"); got != "application/pdf" {
+		t.Errorf("unexpected Content-Type: %q", got)
+	}
+
+	if got := recorder.Header().Get("Content-Length"); got != strconv.Itoa(len(data)) {
+		t.Errorf("unexpected Content-Length: %q", got)
+	}
+
+	if got := recorder.Header().Get("Content-Disposition"); got !=
+		`attachment; filename="internship-certificate.pdf"` {
+		t.Errorf("unexpected Content-Disposition: %q", got)
+	}
+
+	if !bytes.Equal(recorder.Body.Bytes(), data) {
+		t.Fatal("download response body does not match document")
+	}
+}
+
+func TestDownloadSubgroupDocumentHandlerStudentForbidden(t *testing.T) {
+	t.Parallel()
+
+	service := &handlerTestService{
+		subgroupDownloadFn: func(
+			ctx context.Context,
+			collegeID int64,
+			actorID int64,
+			actorRole string,
+			groupID int64,
+			subgroupID int64,
+			documentID int64,
+		) (io.ReadCloser, Document, error) {
+			t.Fatal("download service must not be called for a student")
+			return nil, Document{}, nil
+		},
+	}
+
+	handler := NewHandler(service)
+
+	recorder := makeSubgroupPreviewAuthenticatedRequest(
+		t,
+		handler,
+		"/groups/10/subgroups/20/documents/100/download",
+		"student",
+		"10",
+		"20",
+	)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf(
+			"expected status 403, got %d. Body: %s",
+			recorder.Code,
+			recorder.Body.String(),
 		)
 	}
 }
