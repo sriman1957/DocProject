@@ -19,6 +19,7 @@ import (
 	"docproject/backend/internal/config"
 	"docproject/backend/internal/documents"
 	"docproject/backend/internal/groups"
+	"docproject/backend/internal/notifications"
 	"docproject/backend/internal/subgroupassignments"
 	"docproject/backend/internal/subgroups"
 	"docproject/backend/internal/users"
@@ -280,6 +281,34 @@ func run() error {
 	mux.Handle(
 		"DELETE /groups/{group_id}/subgroups/{subgroup_id}/faculty/{faculty_id}",
 		protectedSubgroupAssignmentsHandler,
+	)
+
+	// Notification routes
+	notificationsService := notifications.NewService(database)
+	notificationsHandler := notifications.NewHandler(notificationsService)
+
+	mux.Handle(
+		"GET /notifications",
+		auth.AuthMiddleware(
+			tokenService,
+			notificationsHandler,
+		),
+	)
+
+	mux.Handle(
+		"PATCH /notifications/{notification_id}/read",
+		auth.AuthMiddleware(
+			tokenService,
+			notificationsHandler,
+		),
+	)
+
+	mux.Handle(
+		"GET /notifications/unread-count",
+		auth.AuthMiddleware(
+			tokenService,
+			notificationsHandler,
+		),
 	)
 
 	// Health routes

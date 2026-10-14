@@ -146,7 +146,9 @@ func (s *Service) Create(
 
 	// The partial unique index allows a previously archived subgroup
 	// name to be reused, but prevents duplicate active names.
+
 	const insertQuery = `
+	WITH created_subgroup AS (
 		INSERT INTO subgroups (
 			college_id,
 			group_id,
@@ -163,12 +165,53 @@ func (s *Service) Create(
 			college_id,
 			group_id,
 			name,
-			COALESCE(description, ''),
+			COALESCE(description, '') AS description,
 			created_by,
 			is_active,
-			created_at::text,
-			updated_at::text
-	`
+			created_at::text AS created_at,
+			updated_at::text AS updated_at
+	),
+	inserted_notifications AS (
+		INSERT INTO notifications (
+			recipient_user_id,
+			actor_user_id,
+			group_id,
+			subgroup_id,
+			type,
+			message
+		)
+		SELECT
+			u.id,
+			$5,
+			cs.group_id,
+			cs.id,
+			'subgroup_created',
+			format('New subgroup "%s" was created.', cs.name)
+		FROM created_subgroup cs
+		JOIN group_memberships gm
+			ON gm.college_id = cs.college_id
+			AND gm.group_id = cs.group_id
+			AND gm.membership_role = 'student'
+		JOIN users u
+			ON u.id = gm.user_id
+			AND u.college_id = cs.college_id
+			AND u.role = 'student'
+			AND u.is_active = TRUE
+		WHERE u.id <> $5
+		RETURNING id
+	)
+	SELECT
+		id,
+		college_id,
+		group_id,
+		name,
+		description,
+		created_by,
+		is_active,
+		created_at,
+		updated_at
+	FROM created_subgroup
+`
 
 	var subgroup Subgroup
 

@@ -77,6 +77,18 @@ func TestSubgroupServiceIntegration(t *testing.T) {
 	studentA := createSubgroupTestUser(
 		t, ctx, tx, collegeA, "student", "student",
 	)
+	inactiveStudentA := createSubgroupTestUser(
+		t, ctx, tx, collegeA, "inactive-student", "student",
+	)
+
+	_, err = tx.Exec(ctx, `
+		UPDATE users
+		SET is_active = FALSE
+		WHERE id = $1
+	`, inactiveStudentA)
+	if err != nil {
+		t.Fatalf("deactivate integration test student: %v", err)
+	}
 	outsiderFaculty := createSubgroupTestUser(
 		t, ctx, tx, collegeA, "outsider", "faculty",
 	)
@@ -84,6 +96,11 @@ func TestSubgroupServiceIntegration(t *testing.T) {
 	// Create an administrator in college B.
 	adminB := createSubgroupTestUser(
 		t, ctx, tx, collegeB, "admin", "college_admin",
+	)
+
+	// Create a student in college B.
+	studentB := createSubgroupTestUser(
+		t, ctx, tx, collegeB, "student", "student",
 	)
 
 	// Create a group in college A.
@@ -107,6 +124,40 @@ func TestSubgroupServiceIntegration(t *testing.T) {
 		t.Fatalf("create group A: %v", err)
 	}
 
+	// Create a separate group in college B with its own student.
+	var groupB int64
+	err = tx.QueryRow(ctx, `
+		INSERT INTO groups (
+			college_id,
+			name,
+			description,
+			created_by
+		)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id
+	`,
+		collegeB,
+		"Subgroup Integration Group B",
+		"Created for notification isolation tests",
+		adminB,
+	).Scan(&groupB)
+	if err != nil {
+		t.Fatalf("create group B: %v", err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO group_memberships (
+			college_id,
+			group_id,
+			user_id,
+			membership_role
+		)
+		VALUES ($1, $2, $3, 'student')
+	`, collegeB, groupB, studentB)
+	if err != nil {
+		t.Fatalf("create group B student membership: %v", err)
+	}
+
 	// Add faculty and student memberships to group A.
 	_, err = tx.Exec(ctx, `
 		INSERT INTO group_memberships (
@@ -117,8 +168,9 @@ func TestSubgroupServiceIntegration(t *testing.T) {
 		)
 		VALUES
 			($1, $2, $3, 'faculty'),
-			($1, $2, $4, 'student')
-	`, collegeA, groupA, facultyA, studentA)
+			($1, $2, $4, 'student'),
+			($1, $2, $5, 'student')
+	`, collegeA, groupA, facultyA, studentA, inactiveStudentA)
 	if err != nil {
 		t.Fatalf("create group memberships: %v", err)
 	}
@@ -165,6 +217,70 @@ func TestSubgroupServiceIntegration(t *testing.T) {
 		t.Error("expected newly created subgroup to be active")
 	}
 
+	// Verify that subgroup creation notifies the group's active student.
+	var notificationCount int
+	err = tx.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM notifications
+		WHERE recipient_user_id = $1
+		  AND actor_user_id = $2
+		  AND group_id = $3
+		  AND subgroup_id = $4
+		  AND type = 'subgroup_created'
+	`, studentA, facultyA, groupA, created.ID).Scan(&notificationCount)
+	if err != nil {
+		t.Fatalf("count subgroup-created notifications: %v", err)
+	}
+	if notificationCount != 1 {
+		t.Errorf(
+			"expected 1 subgroup-created notification for student %d, got %d",
+			studentA,
+			notificationCount,
+		)
+	}
+
+	// Students in another college/group must not receive this notification.
+	var unrelatedNotificationCount int
+	err = tx.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM notifications
+		WHERE recipient_user_id = $1
+		  AND group_id = $2
+		  AND subgroup_id = $3
+		  AND type = 'subgroup_created'
+	`, studentB, groupA, created.ID).Scan(&unrelatedNotificationCount)
+	if err != nil {
+		t.Fatalf("count unrelated subgroup-created notifications: %v", err)
+	}
+	if unrelatedNotificationCount != 0 {
+		t.Errorf(
+			"expected 0 notifications for unrelated student %d, got %d",
+			studentB,
+			unrelatedNotificationCount,
+		)
+	}
+
+	// Inactive students must not receive subgroup-created notifications.
+	var inactiveNotificationCount int
+	err = tx.QueryRow(ctx, `
+    SELECT COUNT(*)
+    FROM notifications
+    WHERE recipient_user_id = $1
+      AND group_id = $2
+      AND subgroup_id = $3
+      AND type = 'subgroup_created'
+`, inactiveStudentA, groupA, created.ID).Scan(&inactiveNotificationCount)
+	if err != nil {
+		t.Fatalf("count inactive student notifications: %v", err)
+	}
+	if inactiveNotificationCount != 0 {
+		t.Errorf(
+			"expected 0 notifications for inactive student %d, got %d",
+			inactiveStudentA,
+			inactiveNotificationCount,
+		)
+	}
+
 	// 2. An administrator in the same college can create a subgroup.
 	adminCreated, err := service.Create(
 		ctx,
@@ -199,6 +315,26 @@ func TestSubgroupServiceIntegration(t *testing.T) {
 	)
 	if err != ErrSubgroupExists {
 		t.Errorf("expected ErrSubgroupExists, got %v", err)
+	}
+
+	// Duplicate subgroup creation must not create another notification.
+	err = tx.QueryRow(ctx, `
+    SELECT COUNT(*)
+    FROM notifications
+    WHERE recipient_user_id = $1
+      AND actor_user_id = $2
+      AND group_id = $3
+      AND subgroup_id = $4
+      AND type = 'subgroup_created'
+`, studentA, facultyA, groupA, created.ID).Scan(&notificationCount)
+	if err != nil {
+		t.Fatalf("count notifications after duplicate subgroup creation: %v", err)
+	}
+	if notificationCount != 1 {
+		t.Errorf(
+			"expected notification count to remain 1 after duplicate creation, got %d",
+			notificationCount,
+		)
 	}
 
 	// 4. A student cannot create a subgroup.
