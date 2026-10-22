@@ -1,0 +1,134 @@
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+
+import '../config/api_config.dart';
+
+class ApiException implements Exception {
+  const ApiException({required this.statusCode, required this.message});
+
+  final int statusCode;
+  final String message;
+
+  @override
+  String toString() => 'ApiException($statusCode): $message';
+}
+
+class ApiClient {
+  ApiClient({String? baseUrl, http.Client? httpClient})
+    : _baseUrl = (baseUrl ?? ApiConfig.baseUrl).replaceFirst(
+        RegExp(r'/+$'),
+        '',
+      ),
+      _httpClient = httpClient ?? http.Client();
+
+  final String _baseUrl;
+  final http.Client _httpClient;
+
+  Uri _buildUri(String path) {
+    final normalizedPath = path.startsWith('/') ? path : '/$path';
+    return Uri.parse('$_baseUrl$normalizedPath');
+  }
+
+  Map<String, String> _headers(String? accessToken) {
+    return {
+      'Accept': 'application/json',
+      if (accessToken != null && accessToken.isNotEmpty)
+        'Authorization': 'Bearer $accessToken',
+    };
+  }
+
+  Future<dynamic> get(String path, {String? accessToken}) {
+    return _send('GET', path, accessToken: accessToken);
+  }
+
+  Future<dynamic> post(String path, {Object? body, String? accessToken}) {
+    return _send('POST', path, body: body, accessToken: accessToken);
+  }
+
+  Future<dynamic> patch(String path, {Object? body, String? accessToken}) {
+    return _send('PATCH', path, body: body, accessToken: accessToken);
+  }
+
+  Future<dynamic> delete(String path, {String? accessToken}) {
+    return _send('DELETE', path, accessToken: accessToken);
+  }
+
+  Future<dynamic> _send(
+    String method,
+    String path, {
+    Object? body,
+    String? accessToken,
+  }) async {
+    final uri = _buildUri(path);
+    final headers = _headers(accessToken);
+
+    if (body != null) {
+      headers['Content-Type'] = 'application/json';
+    }
+
+    late final http.Response response;
+
+    try {
+      switch (method) {
+        case 'GET':
+          response = await _httpClient.get(uri, headers: headers);
+        case 'POST':
+          response = await _httpClient.post(
+            uri,
+            headers: headers,
+            body: body == null ? null : jsonEncode(body),
+          );
+        case 'PATCH':
+          response = await _httpClient.patch(
+            uri,
+            headers: headers,
+            body: body == null ? null : jsonEncode(body),
+          );
+        case 'DELETE':
+          response = await _httpClient.delete(uri, headers: headers);
+        default:
+          throw ArgumentError.value(method, 'method', 'Unsupported method');
+      }
+    } on ApiException {
+      rethrow;
+    } catch (error) {
+      throw ApiException(
+        statusCode: 0,
+        message: 'Unable to connect to the server. Check your connection.',
+      );
+    }
+
+    final responseBody = response.body.trim();
+
+    dynamic decodedBody;
+
+    if (responseBody.isNotEmpty) {
+      try {
+        decodedBody = jsonDecode(responseBody);
+      } on FormatException {
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          throw ApiException(
+            statusCode: response.statusCode,
+            message: 'The server returned an invalid response.',
+          );
+        }
+      }
+    }
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final message = decodedBody is Map<String, dynamic>
+          ? decodedBody['error']?.toString() ??
+                'Request failed with status ${response.statusCode}.'
+          : 'Request failed with status ${response.statusCode}.';
+
+      throw ApiException(statusCode: response.statusCode, message: message);
+    }
+
+    return decodedBody;
+  }
+
+  void close() {
+    _httpClient.close();
+  }
+}

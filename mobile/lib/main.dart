@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
 import 'app.dart';
+import 'app_dependencies.dart';
 
 void main() {
-  runApp(const DocProjectApp());
+  WidgetsFlutterBinding.ensureInitialized();
+  final dependencies = AppDependencies.create();
+  runApp(DocProjectApp(dependencies: dependencies));
 }

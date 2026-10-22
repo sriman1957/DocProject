@@ -1,10 +1,53 @@
 import 'package:flutter/material.dart';
 
+import 'app_dependencies.dart';
 import 'core/theme/app_theme.dart';
+import 'features/auth/auth_controller.dart';
 import 'features/auth/screens/login_screen.dart';
+import 'features/auth/screens/session_failure_screen.dart';
+import 'features/auth/screens/startup_screen.dart';
+import 'features/groups/groups_controller.dart';
+import 'features/home/screens/home_screen.dart';
 
-class DocProjectApp extends StatelessWidget {
-  const DocProjectApp({super.key});
+class DocProjectApp extends StatefulWidget {
+  const DocProjectApp({
+    this.dependencies,
+    this.authController,
+    this.groupsController,
+    super.key,
+  });
+
+  final AppDependencies? dependencies;
+  final AuthController? authController;
+  final GroupsController? groupsController;
+
+  @override
+  State<DocProjectApp> createState() => _DocProjectAppState();
+}
+
+class _DocProjectAppState extends State<DocProjectApp> {
+  late final AppDependencies _dependencies;
+  late final AuthController _authController;
+  late final GroupsController _groupsController;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _dependencies =
+        widget.dependencies ??
+        AppDependencies.create(
+          authController: widget.authController,
+          groupsController: widget.groupsController,
+        );
+
+    _authController = widget.authController ?? _dependencies.authController;
+    _groupsController =
+        widget.groupsController ?? _dependencies.groupsController;
+
+    // Trigger one-time session restoration on application startup
+    _authController.restoreSession();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -12,7 +55,25 @@ class DocProjectApp extends StatelessWidget {
       title: 'DocProject',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
-      home: const LoginScreen(),
+      home: ListenableBuilder(
+        listenable: _authController,
+        builder: (context, _) {
+          return switch (_authController.state) {
+            AuthInitial() || AuthLoading() => const StartupScreen(),
+            Authenticated(:final user) => HomeScreen(
+              user: user,
+              authController: _authController,
+              groupsController: _groupsController,
+            ),
+            AuthSessionCheckFailure(:final message) => SessionFailureScreen(
+              message: message,
+              onRetry: () => _authController.restoreSession(force: true),
+              onContinueToLogin: _authController.markUnauthenticated,
+            ),
+            Unauthenticated() => LoginScreen(authController: _authController),
+          };
+        },
+      ),
     );
   }
 }
