@@ -254,5 +254,48 @@ void main() {
       final reviewBtn = find.byKey(const Key('review_submissions_button'));
       expect(reviewBtn, findsNothing);
     });
+
+    testWidgets(
+      'faculty sees Collection Windows button and tapping it navigates to SubgroupAccessPeriodsScreen',
+      (tester) async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SubgroupDetailsScreen(
+              subgroup: sampleSubgroup,
+              parentGroup: sampleParentGroup,
+              user: sampleFaculty,
+            ),
+          ),
+        );
+
+        final windowsBtn = find.byKey(const Key('collection_windows_button'));
+        expect(windowsBtn, findsOneWidget);
+        expect(find.text('Collection Windows'), findsOneWidget);
+
+        await tester.scrollUntilVisible(windowsBtn, 500);
+        await tester.tap(windowsBtn);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(find.text('Collection Windows'), findsWidgets);
+      },
+    );
+
+    testWidgets('student does not see Collection Windows button', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: SubgroupDetailsScreen(
+            subgroup: sampleSubgroup,
+            parentGroup: sampleParentGroup,
+            user: sampleStudent,
+          ),
+        ),
+      );
+
+      final windowsBtn = find.byKey(const Key('collection_windows_button'));
+      expect(windowsBtn, findsNothing);
+    });
   });
 }

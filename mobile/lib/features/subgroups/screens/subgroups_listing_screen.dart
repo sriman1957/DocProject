@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../../access_periods/controllers/access_periods_controller.dart';
 import '../../auth/models/user.dart';
 import '../../documents/controllers/document_upload_controller.dart';
+import '../../documents/controllers/subgroup_submissions_controller.dart';
 import '../../groups/models/group.dart';
 import '../models/subgroup.dart';
 import '../subgroups_controller.dart';
@@ -14,6 +16,8 @@ class SubgroupsListingScreen extends StatefulWidget {
     required this.user,
     required this.subgroupsController,
     this.uploadController,
+    this.accessPeriodsController,
+    this.submissionsController,
     this.autoLoad = true,
     super.key,
   });
@@ -22,6 +26,8 @@ class SubgroupsListingScreen extends StatefulWidget {
   final User user;
   final SubgroupsController subgroupsController;
   final DocumentUploadController? uploadController;
+  final AccessPeriodsController? accessPeriodsController;
+  final SubgroupSubmissionsController? submissionsController;
   final bool autoLoad;
 
   @override
@@ -45,6 +51,8 @@ class _SubgroupsListingScreenState extends State<SubgroupsListingScreen> {
           parentGroup: widget.parentGroup,
           user: widget.user,
           uploadController: widget.uploadController,
+          accessPeriodsController: widget.accessPeriodsController,
+          submissionsController: widget.submissionsController,
         ),
       ),
     );

@@ -1,7 +1,6 @@
 import 'package:docproject/app.dart';
 import 'package:docproject/core/network/api_client.dart';
 import 'package:docproject/core/storage/token_storage.dart';
-import 'package:docproject/core/widgets/app_placeholder_screen.dart';
 import 'package:docproject/core/widgets/unsupported_role_screen.dart';
 import 'package:docproject/features/auth/auth_controller.dart';
 import 'package:docproject/features/auth/models/auth_response.dart';
@@ -14,6 +13,7 @@ import 'package:docproject/features/home/screens/app_shell.dart';
 import 'package:docproject/features/home/screens/faculty_dashboard_screen.dart';
 import 'package:docproject/features/home/screens/student_dashboard_screen.dart';
 import 'package:docproject/features/groups/screens/groups_listing_screen.dart';
+import 'package:docproject/features/notifications/screens/notifications_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/testing.dart';
@@ -513,9 +513,8 @@ void main() {
         await tester.tap(alertsTab);
         await tester.pumpAndSettle();
 
-        expect(find.byType(AppPlaceholderScreen), findsOneWidget);
+        expect(find.byType(NotificationsScreen), findsOneWidget);
         expect(find.text('Notifications'), findsOneWidget);
-        expect(find.text('Coming Soon in Feature Phase'), findsOneWidget);
 
         // Tap "Groups" navigation item
         final groupsTab = find.text('Groups');

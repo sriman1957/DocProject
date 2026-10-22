@@ -194,7 +194,7 @@ class _SubgroupSubmissionsScreenState extends State<SubgroupSubmissionsScreen> {
                 listenable: _controller,
                 builder: (context, _) {
                   return switch (_controller.state) {
-                    SubmissionsInitial() ||
+                    SubmissionsInitial() => const SizedBox.shrink(),
                     SubmissionsLoading() => const Center(
                       child: CircularProgressIndicator(
                         key: Key('submissions_loading_indicator'),

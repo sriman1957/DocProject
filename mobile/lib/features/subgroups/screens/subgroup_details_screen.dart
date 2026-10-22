@@ -3,7 +3,10 @@ import 'package:flutter/material.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/storage/token_storage.dart';
 import '../../auth/models/user.dart';
+import '../../access_periods/controllers/access_periods_controller.dart';
+import '../../access_periods/screens/subgroup_access_periods_screen.dart';
 import '../../documents/controllers/document_upload_controller.dart';
+import '../../documents/controllers/subgroup_submissions_controller.dart';
 import '../../documents/screens/subgroup_submissions_screen.dart';
 import '../../documents/services/documents_service.dart';
 import '../../documents/widgets/file_upload_sheet.dart';
@@ -16,6 +19,8 @@ class SubgroupDetailsScreen extends StatelessWidget {
     required this.parentGroup,
     required this.user,
     this.uploadController,
+    this.accessPeriodsController,
+    this.submissionsController,
     super.key,
   });
 
@@ -23,6 +28,8 @@ class SubgroupDetailsScreen extends StatelessWidget {
   final Group parentGroup;
   final User user;
   final DocumentUploadController? uploadController;
+  final AccessPeriodsController? accessPeriodsController;
+  final SubgroupSubmissionsController? submissionsController;
 
   void _openSubmissionSheet(BuildContext context) {
     final effectiveController =
@@ -321,25 +328,59 @@ class SubgroupDetailsScreen extends StatelessWidget {
                                 ),
                               ] else if (user.isFaculty) ...[
                                 const SizedBox(height: 12),
-                                FilledButton.icon(
-                                  key: const Key('review_submissions_button'),
-                                  onPressed: () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute<void>(
-                                        builder: (_) =>
-                                            SubgroupSubmissionsScreen(
-                                              user: user,
-                                              parentGroup: parentGroup,
-                                              subgroup: subgroup,
-                                            ),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    FilledButton.icon(
+                                      key: const Key(
+                                        'review_submissions_button',
                                       ),
-                                    );
-                                  },
-                                  icon: const Icon(
-                                    Icons.rate_review_rounded,
-                                    size: 18,
-                                  ),
-                                  label: const Text('Review Submissions'),
+                                      onPressed: () {
+                                        Navigator.of(context).push(
+                                          MaterialPageRoute<void>(
+                                            builder: (_) =>
+                                                SubgroupSubmissionsScreen(
+                                                  user: user,
+                                                  parentGroup: parentGroup,
+                                                  subgroup: subgroup,
+                                                  controller:
+                                                      submissionsController,
+                                                ),
+                                          ),
+                                        );
+                                      },
+                                      icon: const Icon(
+                                        Icons.rate_review_rounded,
+                                        size: 18,
+                                      ),
+                                      label: const Text('Review Submissions'),
+                                    ),
+                                    FilledButton.tonalIcon(
+                                      key: const Key(
+                                        'collection_windows_button',
+                                      ),
+                                      onPressed: () {
+                                        Navigator.of(context).push(
+                                          MaterialPageRoute<void>(
+                                            builder: (_) =>
+                                                SubgroupAccessPeriodsScreen(
+                                                  user: user,
+                                                  parentGroup: parentGroup,
+                                                  subgroup: subgroup,
+                                                  controller:
+                                                      accessPeriodsController,
+                                                ),
+                                          ),
+                                        );
+                                      },
+                                      icon: const Icon(
+                                        Icons.event_note_rounded,
+                                        size: 18,
+                                      ),
+                                      label: const Text('Collection Windows'),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ],

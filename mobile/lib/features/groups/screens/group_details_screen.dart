@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../../../core/network/api_client.dart';
 import '../../../core/storage/token_storage.dart';
+import '../../access_periods/controllers/access_periods_controller.dart';
 import '../../auth/models/user.dart';
 import '../../documents/controllers/document_upload_controller.dart';
+import '../../documents/controllers/subgroup_submissions_controller.dart';
 import '../../subgroups/screens/subgroups_listing_screen.dart';
 import '../../subgroups/services/subgroups_service.dart';
 import '../../subgroups/subgroups_controller.dart';
@@ -15,6 +17,8 @@ class GroupDetailsScreen extends StatelessWidget {
     required this.user,
     this.subgroupsController,
     this.uploadController,
+    this.accessPeriodsController,
+    this.submissionsController,
     super.key,
   });
 
@@ -22,6 +26,8 @@ class GroupDetailsScreen extends StatelessWidget {
   final User user;
   final SubgroupsController? subgroupsController;
   final DocumentUploadController? uploadController;
+  final AccessPeriodsController? accessPeriodsController;
+  final SubgroupSubmissionsController? submissionsController;
 
   void _openSubgroups(BuildContext context) {
     final effectiveController =
@@ -40,6 +46,8 @@ class GroupDetailsScreen extends StatelessWidget {
           user: user,
           subgroupsController: effectiveController,
           uploadController: uploadController,
+          accessPeriodsController: accessPeriodsController,
+          submissionsController: submissionsController,
         ),
       ),
     );

@@ -1,15 +1,19 @@
 import 'package:flutter/material.dart';
 
-import '../../../core/widgets/app_placeholder_screen.dart';
+import '../../access_periods/controllers/access_periods_controller.dart';
 import '../../auth/auth_controller.dart';
 import '../../auth/models/user.dart';
 import '../../documents/controllers/document_upload_controller.dart';
+import '../../documents/controllers/subgroup_submissions_controller.dart';
 import '../../documents/documents_controller.dart';
 import '../../documents/screens/personal_vault_screen.dart';
 import '../../documents/services/documents_service.dart';
 import '../../groups/groups_controller.dart';
 import '../../groups/screens/groups_listing_screen.dart';
 import '../../groups/services/groups_service.dart';
+import '../../notifications/controllers/notifications_controller.dart';
+import '../../notifications/screens/notifications_screen.dart';
+import '../../notifications/services/notifications_service.dart';
 import '../../subgroups/services/subgroups_service.dart';
 import '../../subgroups/subgroups_controller.dart';
 import 'faculty_dashboard_screen.dart';
@@ -23,6 +27,9 @@ class AppShell extends StatefulWidget {
     this.subgroupsController,
     this.documentsController,
     this.uploadController,
+    this.notificationsController,
+    this.accessPeriodsController,
+    this.submissionsController,
     super.key,
   });
 
@@ -32,6 +39,9 @@ class AppShell extends StatefulWidget {
   final SubgroupsController? subgroupsController;
   final DocumentsController? documentsController;
   final DocumentUploadController? uploadController;
+  final NotificationsController? notificationsController;
+  final AccessPeriodsController? accessPeriodsController;
+  final SubgroupSubmissionsController? submissionsController;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -43,6 +53,7 @@ class _AppShellState extends State<AppShell> {
   late final SubgroupsController _subgroupsController;
   late final DocumentsController _documentsController;
   late final DocumentUploadController _uploadController;
+  late final NotificationsController _notificationsController;
 
   @override
   void initState() {
@@ -76,6 +87,14 @@ class _AppShellState extends State<AppShell> {
         DocumentUploadController(
           documentsService: _documentsController.documentsService,
         );
+    _notificationsController =
+        widget.notificationsController ??
+        NotificationsController(
+          notificationsService: NotificationsService(
+            apiClient: widget.authController.authService.apiClient,
+            tokenStorage: widget.authController.tokenStorage,
+          ),
+        );
   }
 
   void _onSelectTab(int index) {
@@ -91,6 +110,11 @@ class _AppShellState extends State<AppShell> {
     final groupsTabIndex = isStudent ? 2 : 1;
     if (index == groupsTabIndex) {
       _groupsController.loadGroups();
+    }
+
+    const alertsTabIndex = 3;
+    if (index == alertsTabIndex) {
+      _notificationsController.loadNotifications();
     }
   }
 
@@ -142,12 +166,13 @@ class _AppShellState extends State<AppShell> {
               groupsController: _groupsController,
               subgroupsController: _subgroupsController,
               uploadController: _uploadController,
+              accessPeriodsController: widget.accessPeriodsController,
+              submissionsController: widget.submissionsController,
               autoLoad: false,
             ),
-            const AppPlaceholderScreen(
-              title: 'Notifications',
-              icon: Icons.notifications_outlined,
-              description: 'Stay updated with active submission windows and certificate collection alerts.',
+            NotificationsScreen(
+              controller: _notificationsController,
+              autoLoad: false,
             ),
           ]
         : [
@@ -160,13 +185,14 @@ class _AppShellState extends State<AppShell> {
               user: widget.user,
               groupsController: _groupsController,
               subgroupsController: _subgroupsController,
+              accessPeriodsController: widget.accessPeriodsController,
+              submissionsController: widget.submissionsController,
               autoLoad: false,
             ),
             _FacultySubgroupsHubTab(onNavigateToGroups: () => _onSelectTab(1)),
-            const AppPlaceholderScreen(
-              title: 'Notifications',
-              icon: Icons.notifications_outlined,
-              description: 'Monitor student submissions and department document collection updates.',
+            NotificationsScreen(
+              controller: _notificationsController,
+              autoLoad: false,
             ),
           ];
 
@@ -243,6 +269,21 @@ class _AppShellState extends State<AppShell> {
                 fontWeight: FontWeight.bold,
               ),
             ),
+          ),
+          IconButton(
+            key: const Key('app_shell_notifications_button'),
+            icon: const Icon(Icons.notifications_outlined),
+            tooltip: 'Notifications',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => NotificationsScreen(
+                    controller: _notificationsController,
+                    autoLoad: true,
+                  ),
+                ),
+              );
+            },
           ),
           IconButton(
             icon: const Icon(Icons.logout_rounded),

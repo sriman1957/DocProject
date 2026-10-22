@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 
 import 'app_dependencies.dart';
 import 'core/theme/app_theme.dart';
+import 'features/access_periods/controllers/access_periods_controller.dart';
 import 'features/auth/auth_controller.dart';
 import 'features/auth/screens/login_screen.dart';
 import 'features/auth/screens/session_failure_screen.dart';
 import 'features/auth/screens/startup_screen.dart';
 import 'features/documents/controllers/document_upload_controller.dart';
+import 'features/documents/controllers/subgroup_submissions_controller.dart';
 import 'features/documents/documents_controller.dart';
 import 'features/groups/groups_controller.dart';
 import 'features/home/screens/home_screen.dart';
@@ -20,6 +22,8 @@ class DocProjectApp extends StatefulWidget {
     this.subgroupsController,
     this.documentsController,
     this.uploadController,
+    this.accessPeriodsController,
+    this.submissionsController,
     super.key,
   });
 
@@ -29,6 +33,8 @@ class DocProjectApp extends StatefulWidget {
   final SubgroupsController? subgroupsController;
   final DocumentsController? documentsController;
   final DocumentUploadController? uploadController;
+  final AccessPeriodsController? accessPeriodsController;
+  final SubgroupSubmissionsController? submissionsController;
 
   @override
   State<DocProjectApp> createState() => _DocProjectAppState();
@@ -88,6 +94,8 @@ class _DocProjectAppState extends State<DocProjectApp> {
               subgroupsController: _subgroupsController,
               documentsController: _documentsController,
               uploadController: _uploadController,
+              accessPeriodsController: widget.accessPeriodsController,
+              submissionsController: widget.submissionsController,
             ),
             AuthSessionCheckFailure(:final message) => SessionFailureScreen(
               message: message,
