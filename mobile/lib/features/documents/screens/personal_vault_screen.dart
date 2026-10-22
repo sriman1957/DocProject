@@ -1,20 +1,24 @@
 import 'package:flutter/material.dart';
 
 import '../../auth/models/user.dart';
+import '../controllers/document_upload_controller.dart';
 import '../documents_controller.dart';
 import '../models/vault_document.dart';
 import '../widgets/document_card.dart';
+import '../widgets/file_upload_sheet.dart';
 
 class PersonalVaultScreen extends StatefulWidget {
   const PersonalVaultScreen({
     required this.user,
     required this.controller,
+    this.uploadController,
     this.autoLoad = true,
     super.key,
   });
 
   final User user;
   final DocumentsController controller;
+  final DocumentUploadController? uploadController;
   final bool autoLoad;
 
   @override
@@ -22,12 +26,34 @@ class PersonalVaultScreen extends StatefulWidget {
 }
 
 class _PersonalVaultScreenState extends State<PersonalVaultScreen> {
+  late final DocumentUploadController _uploadController;
+
   @override
   void initState() {
     super.initState();
+    _uploadController =
+        widget.uploadController ??
+        DocumentUploadController(
+          documentsService: widget.controller.documentsService,
+        );
+
     if (widget.autoLoad) {
       widget.controller.loadDocuments();
     }
+  }
+
+  void _openUploadSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => FileUploadSheet(
+        uploadController: _uploadController,
+        destination: UploadDestination.personalVault,
+        onSuccess: () {
+          widget.controller.refresh();
+        },
+      ),
+    );
   }
 
   @override
@@ -46,6 +72,12 @@ class _PersonalVaultScreenState extends State<PersonalVaultScreen> {
             onPressed: () => widget.controller.refresh(),
           ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        key: const Key('upload_document_fab'),
+        onPressed: () => _openUploadSheet(context),
+        icon: const Icon(Icons.upload_file_rounded),
+        label: const Text('Upload Document'),
       ),
       body: SafeArea(
         child: Column(
@@ -220,10 +252,22 @@ class _PersonalVaultScreenState extends State<PersonalVaultScreen> {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
-            OutlinedButton.icon(
-              onPressed: () => widget.controller.refresh(),
-              icon: const Icon(Icons.refresh_rounded, size: 18),
-              label: const Text('Refresh'),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () => widget.controller.refresh(),
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text('Refresh'),
+                ),
+                const SizedBox(width: 12),
+                FilledButton.icon(
+                  key: const Key('empty_state_upload_button'),
+                  onPressed: () => _openUploadSheet(context),
+                  icon: const Icon(Icons.upload_file_rounded, size: 18),
+                  label: const Text('Upload Document'),
+                ),
+              ],
             ),
           ],
         ),

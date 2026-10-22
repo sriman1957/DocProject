@@ -6,6 +6,7 @@ import 'features/auth/auth_controller.dart';
 import 'features/auth/screens/login_screen.dart';
 import 'features/auth/screens/session_failure_screen.dart';
 import 'features/auth/screens/startup_screen.dart';
+import 'features/documents/controllers/document_upload_controller.dart';
 import 'features/documents/documents_controller.dart';
 import 'features/groups/groups_controller.dart';
 import 'features/home/screens/home_screen.dart';
@@ -18,6 +19,7 @@ class DocProjectApp extends StatefulWidget {
     this.groupsController,
     this.subgroupsController,
     this.documentsController,
+    this.uploadController,
     super.key,
   });
 
@@ -26,6 +28,7 @@ class DocProjectApp extends StatefulWidget {
   final GroupsController? groupsController;
   final SubgroupsController? subgroupsController;
   final DocumentsController? documentsController;
+  final DocumentUploadController? uploadController;
 
   @override
   State<DocProjectApp> createState() => _DocProjectAppState();
@@ -37,6 +40,7 @@ class _DocProjectAppState extends State<DocProjectApp> {
   late final GroupsController _groupsController;
   late final SubgroupsController _subgroupsController;
   late final DocumentsController _documentsController;
+  late final DocumentUploadController _uploadController;
 
   @override
   void initState() {
@@ -49,6 +53,7 @@ class _DocProjectAppState extends State<DocProjectApp> {
           groupsController: widget.groupsController,
           subgroupsController: widget.subgroupsController,
           documentsController: widget.documentsController,
+          uploadController: widget.uploadController,
         );
 
     _authController = widget.authController ?? _dependencies.authController;
@@ -58,6 +63,8 @@ class _DocProjectAppState extends State<DocProjectApp> {
         widget.subgroupsController ?? _dependencies.subgroupsController;
     _documentsController =
         widget.documentsController ?? _dependencies.documentsController;
+    _uploadController =
+        widget.uploadController ?? _dependencies.uploadController;
 
     // Trigger one-time session restoration on application startup
     _authController.restoreSession();
@@ -80,6 +87,7 @@ class _DocProjectAppState extends State<DocProjectApp> {
               groupsController: _groupsController,
               subgroupsController: _subgroupsController,
               documentsController: _documentsController,
+              uploadController: _uploadController,
             ),
             AuthSessionCheckFailure(:final message) => SessionFailureScreen(
               message: message,

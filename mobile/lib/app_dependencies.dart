@@ -2,6 +2,7 @@ import 'core/network/api_client.dart';
 import 'core/storage/token_storage.dart';
 import 'features/auth/auth_controller.dart';
 import 'features/auth/services/auth_service.dart';
+import 'features/documents/controllers/document_upload_controller.dart';
 import 'features/documents/documents_controller.dart';
 import 'features/documents/services/documents_service.dart';
 import 'features/groups/groups_controller.dart';
@@ -21,6 +22,7 @@ class AppDependencies {
     required this.subgroupsController,
     required this.documentsService,
     required this.documentsController,
+    required this.uploadController,
   });
 
   final ApiClient apiClient;
@@ -33,6 +35,7 @@ class AppDependencies {
   final SubgroupsController subgroupsController;
   final DocumentsService documentsService;
   final DocumentsController documentsController;
+  final DocumentUploadController uploadController;
 
   static AppDependencies create({
     ApiClient? apiClient,
@@ -45,6 +48,7 @@ class AppDependencies {
     SubgroupsController? subgroupsController,
     DocumentsService? documentsService,
     DocumentsController? documentsController,
+    DocumentUploadController? uploadController,
   }) {
     final effectiveTokenStorage =
         tokenStorage ?? authController?.tokenStorage ?? TokenStorage();
@@ -90,6 +94,9 @@ class AppDependencies {
     final effectiveDocumentsController =
         documentsController ??
         DocumentsController(documentsService: effectiveDocumentsService);
+    final effectiveUploadController =
+        uploadController ??
+        DocumentUploadController(documentsService: effectiveDocumentsService);
 
     return AppDependencies(
       apiClient: effectiveApiClient,
@@ -102,6 +109,7 @@ class AppDependencies {
       subgroupsController: effectiveSubgroupsController,
       documentsService: effectiveDocumentsService,
       documentsController: effectiveDocumentsController,
+      uploadController: effectiveUploadController,
     );
   }
 
@@ -111,5 +119,6 @@ class AppDependencies {
     groupsController.dispose();
     subgroupsController.dispose();
     documentsController.dispose();
+    uploadController.dispose();
   }
 }

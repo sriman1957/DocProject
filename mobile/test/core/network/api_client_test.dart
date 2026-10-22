@@ -102,5 +102,103 @@ void main() {
       expect(result, isNull);
       client.close();
     });
+
+    test('postMultipart sends multipart request with token, fields, and file bytes', () async {
+      final client = ApiClient(
+        baseUrl: 'http://localhost:8080',
+        httpClient: MockClient.streaming((request, bodyStream) async {
+          expect(request, isA<http.MultipartRequest>());
+          final multipartRequest = request as http.MultipartRequest;
+          expect(multipartRequest.method, 'POST');
+          expect(multipartRequest.url.path, '/documents');
+          expect(
+            multipartRequest.headers['authorization'],
+            'Bearer test-token',
+          );
+          expect(multipartRequest.fields['category'], 'assignment');
+          expect(multipartRequest.files.length, 1);
+          expect(multipartRequest.files.first.field, 'file');
+          expect(multipartRequest.files.first.filename, 'test.pdf');
+
+          final responseBody = jsonEncode({
+            'id': 42,
+            'original_filename': 'test.pdf',
+          });
+          return http.StreamedResponse(
+            Stream.value(utf8.encode(responseBody)),
+            201,
+            headers: {'content-type': 'application/json'},
+          );
+        }),
+      );
+
+      final result = await client.postMultipart(
+        '/documents',
+        fieldName: 'file',
+        filename: 'test.pdf',
+        bytes: [1, 2, 3, 4],
+        fields: {'category': 'assignment'},
+        accessToken: 'test-token',
+      );
+
+      expect(result, {'id': 42, 'original_filename': 'test.pdf'});
+      client.close();
+    });
+
+    test(
+      'postMultipart throws ApiException on server error response',
+      () async {
+        final client = ApiClient(
+          baseUrl: 'http://localhost:8080',
+          httpClient: MockClient((request) async {
+            return http.Response(
+              jsonEncode({'error': 'file size exceeds 20MB'}),
+              413,
+              headers: {'content-type': 'application/json'},
+            );
+          }),
+        );
+
+        await expectLater(
+          client.postMultipart(
+            '/documents',
+            fieldName: 'file',
+            filename: 'large.pdf',
+            bytes: [1, 2, 3],
+            accessToken: 'test-token',
+          ),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'statusCode', 413)
+                .having((e) => e.message, 'message', 'file size exceeds 20MB'),
+          ),
+        );
+
+        client.close();
+      },
+    );
+
+    test('postMultipart throws ApiException on network failure', () async {
+      final client = ApiClient(
+        baseUrl: 'http://localhost:8080',
+        httpClient: MockClient((request) async {
+          throw http.ClientException('Network down');
+        }),
+      );
+
+      await expectLater(
+        client.postMultipart(
+          '/documents',
+          fieldName: 'file',
+          filename: 'doc.pdf',
+          bytes: [1],
+        ),
+        throwsA(
+          isA<ApiException>().having((e) => e.statusCode, 'statusCode', 0),
+        ),
+      );
+
+      client.close();
+    });
   });
 }

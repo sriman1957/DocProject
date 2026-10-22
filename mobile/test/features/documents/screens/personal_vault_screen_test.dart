@@ -5,7 +5,9 @@ import 'package:docproject/features/documents/documents_controller.dart';
 import 'package:docproject/features/documents/models/vault_document.dart';
 import 'package:docproject/features/documents/screens/personal_vault_screen.dart';
 import 'package:docproject/features/documents/services/documents_service.dart';
+import 'package:docproject/features/documents/services/file_picker_service.dart';
 import 'package:docproject/features/documents/widgets/document_card.dart';
+import 'package:docproject/features/documents/widgets/file_upload_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -34,6 +36,18 @@ class FakeDocumentsService extends DocumentsService {
       throw errorToThrow!;
     }
     return documentsToReturn;
+  }
+
+  @override
+  Future<VaultDocument> uploadPersonalVaultDocument(SelectedFile file) async {
+    return VaultDocument(
+      id: 999,
+      originalFilename: file.name,
+      mimeType: 'application/pdf',
+      fileSizeBytes: file.size,
+      sha256: 'fakehash',
+      uploadedAt: DateTime.now(),
+    );
   }
 }
 
@@ -219,5 +233,43 @@ void main() {
 
       expect(service.callCount, 2);
     });
+
+    testWidgets('tapping upload FAB opens FileUploadSheet', (tester) async {
+      final service = FakeDocumentsService(documentsToReturn: const []);
+      final controller = DocumentsController(documentsService: service);
+
+      await tester.pumpWidget(createTestWidget(controller: controller));
+      await tester.pumpAndSettle();
+
+      final fab = find.byKey(const Key('upload_document_fab'));
+      expect(fab, findsOneWidget);
+
+      await tester.tap(fab);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(FileUploadSheet), findsOneWidget);
+      expect(find.text('Upload to Personal Vault'), findsOneWidget);
+    });
+
+    testWidgets(
+      'empty vault state shows upload button which opens FileUploadSheet',
+      (tester) async {
+        final service = FakeDocumentsService(documentsToReturn: const []);
+        final controller = DocumentsController(documentsService: service);
+
+        await tester.pumpWidget(createTestWidget(controller: controller));
+        await tester.pumpAndSettle();
+
+        final emptyUploadBtn = find.byKey(
+          const Key('empty_state_upload_button'),
+        );
+        expect(emptyUploadBtn, findsOneWidget);
+
+        await tester.tap(emptyUploadBtn);
+        await tester.pumpAndSettle();
+
+        expect(find.byType(FileUploadSheet), findsOneWidget);
+      },
+    );
   });
 }

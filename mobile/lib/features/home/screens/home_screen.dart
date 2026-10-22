@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/widgets/unsupported_role_screen.dart';
 import '../../auth/auth_controller.dart';
 import '../../auth/models/user.dart';
+import '../../documents/controllers/document_upload_controller.dart';
 import '../../documents/documents_controller.dart';
 import '../../groups/groups_controller.dart';
 import '../../subgroups/subgroups_controller.dart';
@@ -15,6 +16,7 @@ class HomeScreen extends StatelessWidget {
     this.groupsController,
     this.subgroupsController,
     this.documentsController,
+    this.uploadController,
     super.key,
   });
 
@@ -23,6 +25,7 @@ class HomeScreen extends StatelessWidget {
   final GroupsController? groupsController;
   final SubgroupsController? subgroupsController;
   final DocumentsController? documentsController;
+  final DocumentUploadController? uploadController;
 
   @override
   Widget build(BuildContext context) {
@@ -36,6 +39,7 @@ class HomeScreen extends StatelessWidget {
       groupsController: groupsController,
       subgroupsController: subgroupsController,
       documentsController: documentsController,
+      uploadController: uploadController,
     );
   }
 }

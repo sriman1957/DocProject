@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/widgets/app_placeholder_screen.dart';
 import '../../auth/auth_controller.dart';
 import '../../auth/models/user.dart';
+import '../../documents/controllers/document_upload_controller.dart';
 import '../../documents/documents_controller.dart';
 import '../../documents/screens/personal_vault_screen.dart';
 import '../../documents/services/documents_service.dart';
@@ -21,6 +22,7 @@ class AppShell extends StatefulWidget {
     this.groupsController,
     this.subgroupsController,
     this.documentsController,
+    this.uploadController,
     super.key,
   });
 
@@ -29,6 +31,7 @@ class AppShell extends StatefulWidget {
   final GroupsController? groupsController;
   final SubgroupsController? subgroupsController;
   final DocumentsController? documentsController;
+  final DocumentUploadController? uploadController;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -39,6 +42,7 @@ class _AppShellState extends State<AppShell> {
   late final GroupsController _groupsController;
   late final SubgroupsController _subgroupsController;
   late final DocumentsController _documentsController;
+  late final DocumentUploadController _uploadController;
 
   @override
   void initState() {
@@ -66,6 +70,11 @@ class _AppShellState extends State<AppShell> {
             apiClient: widget.authController.authService.apiClient,
             tokenStorage: widget.authController.tokenStorage,
           ),
+        );
+    _uploadController =
+        widget.uploadController ??
+        DocumentUploadController(
+          documentsService: _documentsController.documentsService,
         );
   }
 
@@ -125,12 +134,14 @@ class _AppShellState extends State<AppShell> {
             PersonalVaultScreen(
               user: widget.user,
               controller: _documentsController,
+              uploadController: _uploadController,
               autoLoad: false,
             ),
             GroupsListingScreen(
               user: widget.user,
               groupsController: _groupsController,
               subgroupsController: _subgroupsController,
+              uploadController: _uploadController,
               autoLoad: false,
             ),
             const AppPlaceholderScreen(

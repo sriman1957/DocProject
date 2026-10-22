@@ -1,4 +1,5 @@
 import 'package:docproject/features/auth/models/user.dart';
+import 'package:docproject/features/documents/widgets/file_upload_sheet.dart';
 import 'package:docproject/features/groups/models/group.dart';
 import 'package:docproject/features/subgroups/models/subgroup.dart';
 import 'package:docproject/features/subgroups/screens/subgroup_details_screen.dart';
@@ -157,6 +158,54 @@ void main() {
 
       expect(find.byType(SubgroupDetailsScreen), findsNothing);
       expect(find.text('Open Subgroup Details'), findsOneWidget);
+    });
+
+    testWidgets(
+      'student sees Submit Document button and tapping it opens FileUploadSheet',
+      (tester) async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SubgroupDetailsScreen(
+              subgroup: sampleSubgroup,
+              parentGroup: sampleParentGroup,
+              user: sampleStudent,
+            ),
+          ),
+        );
+
+        final submitBtn = find.byKey(
+          const Key('submit_subgroup_document_button'),
+        );
+        expect(submitBtn, findsOneWidget);
+        expect(find.text('Submit Document'), findsOneWidget);
+
+        await tester.scrollUntilVisible(submitBtn, 500);
+        await tester.tap(submitBtn);
+        await tester.pumpAndSettle();
+
+        expect(find.byType(FileUploadSheet), findsOneWidget);
+        expect(
+          find.text('Destination: Hackathon Certificates'),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets('faculty does not see Submit Document button', (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: SubgroupDetailsScreen(
+            subgroup: sampleSubgroup,
+            parentGroup: sampleParentGroup,
+            user: sampleFaculty,
+          ),
+        ),
+      );
+
+      final submitBtn = find.byKey(
+        const Key('submit_subgroup_document_button'),
+      );
+      expect(submitBtn, findsNothing);
     });
   });
 }

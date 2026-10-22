@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/storage/token_storage.dart';
 import '../../auth/models/user.dart';
+import '../../documents/controllers/document_upload_controller.dart';
 import '../../subgroups/screens/subgroups_listing_screen.dart';
 import '../../subgroups/services/subgroups_service.dart';
 import '../../subgroups/subgroups_controller.dart';
@@ -13,12 +14,14 @@ class GroupDetailsScreen extends StatelessWidget {
     required this.group,
     required this.user,
     this.subgroupsController,
+    this.uploadController,
     super.key,
   });
 
   final Group group;
   final User user;
   final SubgroupsController? subgroupsController;
+  final DocumentUploadController? uploadController;
 
   void _openSubgroups(BuildContext context) {
     final effectiveController =
@@ -36,6 +39,7 @@ class GroupDetailsScreen extends StatelessWidget {
           parentGroup: group,
           user: user,
           subgroupsController: effectiveController,
+          uploadController: uploadController,
         ),
       ),
     );

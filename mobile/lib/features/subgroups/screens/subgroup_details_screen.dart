@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/network/api_client.dart';
+import '../../../core/storage/token_storage.dart';
 import '../../auth/models/user.dart';
+import '../../documents/controllers/document_upload_controller.dart';
+import '../../documents/services/documents_service.dart';
+import '../../documents/widgets/file_upload_sheet.dart';
 import '../../groups/models/group.dart';
 import '../models/subgroup.dart';
 
@@ -9,12 +14,47 @@ class SubgroupDetailsScreen extends StatelessWidget {
     required this.subgroup,
     required this.parentGroup,
     required this.user,
+    this.uploadController,
     super.key,
   });
 
   final Subgroup subgroup;
   final Group parentGroup;
   final User user;
+  final DocumentUploadController? uploadController;
+
+  void _openSubmissionSheet(BuildContext context) {
+    final effectiveController =
+        uploadController ??
+        DocumentUploadController(
+          documentsService: DocumentsService(
+            apiClient: ApiClient(),
+            tokenStorage: TokenStorage(),
+          ),
+        );
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => FileUploadSheet(
+        uploadController: effectiveController,
+        destination: UploadDestination.subgroup,
+        groupId: subgroup.groupId,
+        subgroupId: subgroup.id,
+        subgroupName: subgroup.name,
+        onSuccess: () {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Document successfully submitted to ${subgroup.name}.',
+              ),
+              backgroundColor: Colors.green.shade800,
+            ),
+          );
+        },
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -257,13 +297,28 @@ class SubgroupDetailsScreen extends StatelessWidget {
                               const SizedBox(height: 4),
                               Text(
                                 isStudent
-                                    ? 'Uploading academic certificates into this subgroup will be supported in the upcoming Document Submission phase.'
+                                    ? 'Submit required academic certificates or files to this collection subgroup. Uploading academic certificates into this subgroup is verified against active access periods.'
                                     : 'Configuring access periods and reviewing submitted student documents for this subgroup will be enabled in subsequent features.',
                                 style: theme.textTheme.bodySmall?.copyWith(
                                   color: colors.onPrimaryContainer,
                                   height: 1.35,
                                 ),
                               ),
+                              if (isStudent) ...[
+                                const SizedBox(height: 12),
+                                FilledButton.icon(
+                                  key: const Key(
+                                    'submit_subgroup_document_button',
+                                  ),
+                                  onPressed: () =>
+                                      _openSubmissionSheet(context),
+                                  icon: const Icon(
+                                    Icons.send_rounded,
+                                    size: 18,
+                                  ),
+                                  label: const Text('Submit Document'),
+                                ),
+                              ],
                             ],
                           ),
                         ),

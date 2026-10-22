@@ -93,12 +93,55 @@ class ApiClient {
     } on ApiException {
       rethrow;
     } catch (error) {
-      throw ApiException(
+      throw const ApiException(
         statusCode: 0,
         message: 'Unable to connect to the server. Check your connection.',
       );
     }
 
+    return _handleResponse(response);
+  }
+
+  Future<dynamic> postMultipart(
+    String path, {
+    required String fieldName,
+    required String filename,
+    required List<int> bytes,
+    Map<String, String>? fields,
+    String? accessToken,
+  }) async {
+    final uri = _buildUri(path);
+    final headers = _headers(accessToken);
+
+    final request = http.MultipartRequest('POST', uri);
+    request.headers.addAll(headers);
+
+    if (fields != null) {
+      request.fields.addAll(fields);
+    }
+
+    request.files.add(
+      http.MultipartFile.fromBytes(fieldName, bytes, filename: filename),
+    );
+
+    late final http.StreamedResponse streamedResponse;
+    try {
+      streamedResponse = await _httpClient.send(request);
+    } on ApiException {
+      rethrow;
+    } catch (e) {
+      if (e is Error) rethrow;
+      throw const ApiException(
+        statusCode: 0,
+        message: 'Unable to connect to the server. Check your connection.',
+      );
+    }
+
+    final response = await http.Response.fromStream(streamedResponse);
+    return _handleResponse(response);
+  }
+
+  dynamic _handleResponse(http.Response response) {
     final responseBody = response.body.trim();
 
     dynamic decodedBody;
@@ -117,10 +160,17 @@ class ApiClient {
     }
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      final message = decodedBody is Map<String, dynamic>
-          ? decodedBody['error']?.toString() ??
-                'Request failed with status ${response.statusCode}.'
-          : 'Request failed with status ${response.statusCode}.';
+      String message;
+      if (decodedBody is Map<String, dynamic>) {
+        message =
+            decodedBody['error']?.toString() ??
+            decodedBody['message']?.toString() ??
+            responseBody;
+      } else if (responseBody.isNotEmpty) {
+        message = responseBody;
+      } else {
+        message = 'Request failed with status ${response.statusCode}.';
+      }
 
       throw ApiException(statusCode: response.statusCode, message: message);
     }

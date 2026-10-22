@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../auth/models/user.dart';
+import '../../documents/controllers/document_upload_controller.dart';
 import '../../groups/models/group.dart';
 import '../models/subgroup.dart';
 import '../subgroups_controller.dart';
@@ -12,6 +13,7 @@ class SubgroupsListingScreen extends StatefulWidget {
     required this.parentGroup,
     required this.user,
     required this.subgroupsController,
+    this.uploadController,
     this.autoLoad = true,
     super.key,
   });
@@ -19,6 +21,7 @@ class SubgroupsListingScreen extends StatefulWidget {
   final Group parentGroup;
   final User user;
   final SubgroupsController subgroupsController;
+  final DocumentUploadController? uploadController;
   final bool autoLoad;
 
   @override
@@ -41,6 +44,7 @@ class _SubgroupsListingScreenState extends State<SubgroupsListingScreen> {
           subgroup: subgroup,
           parentGroup: widget.parentGroup,
           user: widget.user,
+          uploadController: widget.uploadController,
         ),
       ),
     );
