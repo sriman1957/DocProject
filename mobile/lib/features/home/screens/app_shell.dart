@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import '../../../core/widgets/app_placeholder_screen.dart';
 import '../../auth/auth_controller.dart';
 import '../../auth/models/user.dart';
+import '../../documents/documents_controller.dart';
+import '../../documents/screens/personal_vault_screen.dart';
+import '../../documents/services/documents_service.dart';
 import '../../groups/groups_controller.dart';
 import '../../groups/screens/groups_listing_screen.dart';
 import '../../groups/services/groups_service.dart';
@@ -17,6 +20,7 @@ class AppShell extends StatefulWidget {
     required this.authController,
     this.groupsController,
     this.subgroupsController,
+    this.documentsController,
     super.key,
   });
 
@@ -24,6 +28,7 @@ class AppShell extends StatefulWidget {
   final AuthController authController;
   final GroupsController? groupsController;
   final SubgroupsController? subgroupsController;
+  final DocumentsController? documentsController;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -33,6 +38,7 @@ class _AppShellState extends State<AppShell> {
   int _currentIndex = 0;
   late final GroupsController _groupsController;
   late final SubgroupsController _subgroupsController;
+  late final DocumentsController _documentsController;
 
   @override
   void initState() {
@@ -53,6 +59,14 @@ class _AppShellState extends State<AppShell> {
             tokenStorage: widget.authController.tokenStorage,
           ),
         );
+    _documentsController =
+        widget.documentsController ??
+        DocumentsController(
+          documentsService: DocumentsService(
+            apiClient: widget.authController.authService.apiClient,
+            tokenStorage: widget.authController.tokenStorage,
+          ),
+        );
   }
 
   void _onSelectTab(int index) {
@@ -60,7 +74,12 @@ class _AppShellState extends State<AppShell> {
       _currentIndex = index;
     });
 
-    final groupsTabIndex = widget.user.userRole.isStudent ? 2 : 1;
+    final isStudent = widget.user.userRole.isStudent;
+    if (isStudent && index == 1) {
+      _documentsController.loadDocuments();
+    }
+
+    final groupsTabIndex = isStudent ? 2 : 1;
     if (index == groupsTabIndex) {
       _groupsController.loadGroups();
     }
@@ -103,10 +122,10 @@ class _AppShellState extends State<AppShell> {
               onNavigateTab: _onSelectTab,
               onLogout: () => _confirmLogout(context),
             ),
-            const AppPlaceholderScreen(
-              title: 'Personal Vault',
-              icon: Icons.folder_shared_outlined,
-              description: 'Manage, upload, and organize your academic certificates and documents.',
+            PersonalVaultScreen(
+              user: widget.user,
+              controller: _documentsController,
+              autoLoad: false,
             ),
             GroupsListingScreen(
               user: widget.user,

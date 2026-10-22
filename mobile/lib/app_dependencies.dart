@@ -2,6 +2,8 @@ import 'core/network/api_client.dart';
 import 'core/storage/token_storage.dart';
 import 'features/auth/auth_controller.dart';
 import 'features/auth/services/auth_service.dart';
+import 'features/documents/documents_controller.dart';
+import 'features/documents/services/documents_service.dart';
 import 'features/groups/groups_controller.dart';
 import 'features/groups/services/groups_service.dart';
 import 'features/subgroups/services/subgroups_service.dart';
@@ -17,6 +19,8 @@ class AppDependencies {
     required this.groupsController,
     required this.subgroupsService,
     required this.subgroupsController,
+    required this.documentsService,
+    required this.documentsController,
   });
 
   final ApiClient apiClient;
@@ -27,6 +31,8 @@ class AppDependencies {
   final GroupsController groupsController;
   final SubgroupsService subgroupsService;
   final SubgroupsController subgroupsController;
+  final DocumentsService documentsService;
+  final DocumentsController documentsController;
 
   static AppDependencies create({
     ApiClient? apiClient,
@@ -37,6 +43,8 @@ class AppDependencies {
     GroupsController? groupsController,
     SubgroupsService? subgroupsService,
     SubgroupsController? subgroupsController,
+    DocumentsService? documentsService,
+    DocumentsController? documentsController,
   }) {
     final effectiveTokenStorage =
         tokenStorage ?? authController?.tokenStorage ?? TokenStorage();
@@ -73,6 +81,15 @@ class AppDependencies {
     final effectiveSubgroupsController =
         subgroupsController ??
         SubgroupsController(subgroupsService: effectiveSubgroupsService);
+    final effectiveDocumentsService =
+        documentsService ??
+        DocumentsService(
+          apiClient: effectiveApiClient,
+          tokenStorage: effectiveTokenStorage,
+        );
+    final effectiveDocumentsController =
+        documentsController ??
+        DocumentsController(documentsService: effectiveDocumentsService);
 
     return AppDependencies(
       apiClient: effectiveApiClient,
@@ -83,6 +100,8 @@ class AppDependencies {
       groupsController: effectiveGroupsController,
       subgroupsService: effectiveSubgroupsService,
       subgroupsController: effectiveSubgroupsController,
+      documentsService: effectiveDocumentsService,
+      documentsController: effectiveDocumentsController,
     );
   }
 
@@ -91,5 +110,6 @@ class AppDependencies {
     authController.dispose();
     groupsController.dispose();
     subgroupsController.dispose();
+    documentsController.dispose();
   }
 }

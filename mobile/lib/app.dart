@@ -6,6 +6,7 @@ import 'features/auth/auth_controller.dart';
 import 'features/auth/screens/login_screen.dart';
 import 'features/auth/screens/session_failure_screen.dart';
 import 'features/auth/screens/startup_screen.dart';
+import 'features/documents/documents_controller.dart';
 import 'features/groups/groups_controller.dart';
 import 'features/home/screens/home_screen.dart';
 import 'features/subgroups/subgroups_controller.dart';
@@ -16,6 +17,7 @@ class DocProjectApp extends StatefulWidget {
     this.authController,
     this.groupsController,
     this.subgroupsController,
+    this.documentsController,
     super.key,
   });
 
@@ -23,6 +25,7 @@ class DocProjectApp extends StatefulWidget {
   final AuthController? authController;
   final GroupsController? groupsController;
   final SubgroupsController? subgroupsController;
+  final DocumentsController? documentsController;
 
   @override
   State<DocProjectApp> createState() => _DocProjectAppState();
@@ -33,6 +36,7 @@ class _DocProjectAppState extends State<DocProjectApp> {
   late final AuthController _authController;
   late final GroupsController _groupsController;
   late final SubgroupsController _subgroupsController;
+  late final DocumentsController _documentsController;
 
   @override
   void initState() {
@@ -44,6 +48,7 @@ class _DocProjectAppState extends State<DocProjectApp> {
           authController: widget.authController,
           groupsController: widget.groupsController,
           subgroupsController: widget.subgroupsController,
+          documentsController: widget.documentsController,
         );
 
     _authController = widget.authController ?? _dependencies.authController;
@@ -51,6 +56,8 @@ class _DocProjectAppState extends State<DocProjectApp> {
         widget.groupsController ?? _dependencies.groupsController;
     _subgroupsController =
         widget.subgroupsController ?? _dependencies.subgroupsController;
+    _documentsController =
+        widget.documentsController ?? _dependencies.documentsController;
 
     // Trigger one-time session restoration on application startup
     _authController.restoreSession();
@@ -72,6 +79,7 @@ class _DocProjectAppState extends State<DocProjectApp> {
               authController: _authController,
               groupsController: _groupsController,
               subgroupsController: _subgroupsController,
+              documentsController: _documentsController,
             ),
             AuthSessionCheckFailure(:final message) => SessionFailureScreen(
               message: message,

@@ -9,6 +9,7 @@ import 'package:docproject/features/auth/models/user.dart';
 import 'package:docproject/features/auth/screens/session_failure_screen.dart';
 import 'package:docproject/features/auth/screens/startup_screen.dart';
 import 'package:docproject/features/auth/services/auth_service.dart';
+import 'package:docproject/features/documents/screens/personal_vault_screen.dart';
 import 'package:docproject/features/home/screens/app_shell.dart';
 import 'package:docproject/features/home/screens/faculty_dashboard_screen.dart';
 import 'package:docproject/features/home/screens/student_dashboard_screen.dart';
@@ -503,9 +504,17 @@ void main() {
         await tester.tap(vaultTab);
         await tester.pumpAndSettle();
 
-        // Displays AppPlaceholderScreen with title and coming-soon indicator
-        expect(find.byType(AppPlaceholderScreen), findsOneWidget);
+        // Displays PersonalVaultScreen with title
+        expect(find.byType(PersonalVaultScreen), findsOneWidget);
         expect(find.text('Personal Vault'), findsOneWidget);
+
+        // Tap "Alerts" navigation item
+        final alertsTab = find.text('Alerts');
+        await tester.tap(alertsTab);
+        await tester.pumpAndSettle();
+
+        expect(find.byType(AppPlaceholderScreen), findsOneWidget);
+        expect(find.text('Notifications'), findsOneWidget);
         expect(find.text('Coming Soon in Feature Phase'), findsOneWidget);
 
         // Tap "Groups" navigation item
@@ -543,8 +552,8 @@ void main() {
         await tester.tap(vaultActionCard);
         await tester.pumpAndSettle();
 
-        // Switches to Vault placeholder tab
-        expect(find.byType(AppPlaceholderScreen), findsOneWidget);
+        // Switches to Vault tab
+        expect(find.byType(PersonalVaultScreen), findsOneWidget);
         expect(find.text('Personal Vault'), findsOneWidget);
       },
     );
