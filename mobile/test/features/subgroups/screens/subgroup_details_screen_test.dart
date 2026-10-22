@@ -1,4 +1,5 @@
 import 'package:docproject/features/auth/models/user.dart';
+import 'package:docproject/features/documents/screens/subgroup_submissions_screen.dart';
 import 'package:docproject/features/documents/widgets/file_upload_sheet.dart';
 import 'package:docproject/features/groups/models/group.dart';
 import 'package:docproject/features/subgroups/models/subgroup.dart';
@@ -113,7 +114,7 @@ void main() {
       expect(find.text('Collection & Access Management'), findsOneWidget);
       expect(
         find.textContaining(
-          'Configuring access periods and reviewing submitted student documents',
+          'Review submitted student documents and download authorized files',
         ),
         findsOneWidget,
       );
@@ -206,6 +207,52 @@ void main() {
         const Key('submit_subgroup_document_button'),
       );
       expect(submitBtn, findsNothing);
+    });
+
+    testWidgets(
+      'faculty sees Review Submissions button and tapping it navigates to SubgroupSubmissionsScreen',
+      (tester) async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SubgroupDetailsScreen(
+              subgroup: sampleSubgroup,
+              parentGroup: sampleParentGroup,
+              user: sampleFaculty,
+            ),
+          ),
+        );
+
+        final reviewBtn = find.byKey(const Key('review_submissions_button'));
+        expect(reviewBtn, findsOneWidget);
+        expect(find.text('Review Submissions'), findsOneWidget);
+
+        await tester.scrollUntilVisible(reviewBtn, 500);
+        await tester.tap(reviewBtn);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(find.text('Submissions Review'), findsNothing);
+        // It should show subgroup name in AppBar
+        expect(find.text('Hackathon Certificates'), findsWidgets);
+        expect(find.byType(SubgroupSubmissionsScreen), findsOneWidget);
+      },
+    );
+
+    testWidgets('student does not see Review Submissions button', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: SubgroupDetailsScreen(
+            subgroup: sampleSubgroup,
+            parentGroup: sampleParentGroup,
+            user: sampleStudent,
+          ),
+        ),
+      );
+
+      final reviewBtn = find.byKey(const Key('review_submissions_button'));
+      expect(reviewBtn, findsNothing);
     });
   });
 }

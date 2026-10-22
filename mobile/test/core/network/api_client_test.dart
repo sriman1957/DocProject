@@ -200,5 +200,95 @@ void main() {
 
       client.close();
     });
+
+    test(
+      'getBytes sends GET request with bearer token and returns response bytes',
+      () async {
+        final client = ApiClient(
+          baseUrl: 'http://localhost:8080',
+          httpClient: MockClient((request) async {
+            expect(request.method, 'GET');
+            expect(
+              request.url.path,
+              '/groups/10/subgroups/20/documents/100/download',
+            );
+            expect(request.headers['authorization'], 'Bearer faculty-jwt');
+            expect(request.headers['accept'], '*/*');
+
+            return http.Response.bytes(
+              [37, 80, 68, 70],
+              200,
+              headers: {
+                'content-type': 'application/pdf',
+                'content-disposition': 'attachment; filename="certificate.pdf"',
+              },
+            );
+          }),
+        );
+
+        final response = await client.getBytes(
+          '/groups/10/subgroups/20/documents/100/download',
+          accessToken: 'faculty-jwt',
+        );
+
+        expect(response.statusCode, 200);
+        expect(response.bodyBytes, [37, 80, 68, 70]);
+        expect(response.headers['content-type'], 'application/pdf');
+        expect(
+          response.headers['content-disposition'],
+          'attachment; filename="certificate.pdf"',
+        );
+        client.close();
+      },
+    );
+
+    test('getBytes throws ApiException on server error response without returning error body as file', () async {
+      final client = ApiClient(
+        baseUrl: 'http://localhost:8080',
+        httpClient: MockClient((request) async {
+          return http.Response(
+            jsonEncode({'error': 'forbidden: only faculty can download'}),
+            403,
+            headers: {'content-type': 'application/json'},
+          );
+        }),
+      );
+
+      await expectLater(
+        client.getBytes(
+          '/groups/10/subgroups/20/documents/100/download',
+          accessToken: 'student-token',
+        ),
+        throwsA(
+          isA<ApiException>()
+              .having((e) => e.statusCode, 'statusCode', 403)
+              .having(
+                (e) => e.message,
+                'message',
+                'forbidden: only faculty can download',
+              ),
+        ),
+      );
+
+      client.close();
+    });
+
+    test('getBytes throws ApiException on network failure', () async {
+      final client = ApiClient(
+        baseUrl: 'http://localhost:8080',
+        httpClient: MockClient((request) async {
+          throw http.ClientException('Connection aborted');
+        }),
+      );
+
+      await expectLater(
+        client.getBytes('/groups/10/subgroups/20/documents/100/download'),
+        throwsA(
+          isA<ApiException>().having((e) => e.statusCode, 'statusCode', 0),
+        ),
+      );
+
+      client.close();
+    });
   });
 }

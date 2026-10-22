@@ -414,5 +414,283 @@ void main() {
         ),
       );
     });
+
+    group('getSubgroupSubmissions', () {
+      test(
+        'calls GET /groups/:gid/subgroups/:sid/documents with Bearer token',
+        () async {
+          String? capturedPath;
+          String? capturedAuthHeader;
+
+          final mockClient = MockClient((request) async {
+            capturedPath = request.url.path;
+            capturedAuthHeader = request.headers['Authorization'];
+
+            final body = jsonEncode([
+              {
+                'id': 201,
+                'original_filename': 'student_submission.pdf',
+                'mime_type': 'application/pdf',
+                'file_size_bytes': 10240,
+                'sha256': 'aabbccdd11223344',
+                'uploaded_at': '2026-10-01T12:00:00.000Z',
+              },
+            ]);
+
+            return http.Response(
+              body,
+              200,
+              headers: {'content-type': 'application/json'},
+            );
+          });
+
+          final apiClient = ApiClient(
+            baseUrl: 'http://localhost:8080',
+            httpClient: mockClient,
+          );
+          final tokenStorage = InMemoryTokenStorage(token: 'faculty-jwt-token');
+          final service = DocumentsService(
+            apiClient: apiClient,
+            tokenStorage: tokenStorage,
+          );
+
+          final documents = await service.getSubgroupSubmissions(
+            groupId: 10,
+            subgroupId: 25,
+          );
+
+          expect(capturedPath, '/groups/10/subgroups/25/documents');
+          expect(capturedAuthHeader, 'Bearer faculty-jwt-token');
+          expect(documents.length, 1);
+          expect(documents.first.id, 201);
+          expect(documents.first.originalFilename, 'student_submission.pdf');
+        },
+      );
+
+      test('returns empty list when backend returns empty array', () async {
+        final mockClient = MockClient((request) async {
+          return http.Response(
+            '[]',
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        });
+
+        final apiClient = ApiClient(
+          baseUrl: 'http://localhost:8080',
+          httpClient: mockClient,
+        );
+        final tokenStorage = InMemoryTokenStorage(token: 'faculty-token');
+        final service = DocumentsService(
+          apiClient: apiClient,
+          tokenStorage: tokenStorage,
+        );
+
+        final documents = await service.getSubgroupSubmissions(
+          groupId: 10,
+          subgroupId: 25,
+        );
+
+        expect(documents, isEmpty);
+      });
+
+      test('throws 401 when token is missing', () async {
+        final apiClient = ApiClient(baseUrl: 'http://localhost:8080');
+        final tokenStorage = InMemoryTokenStorage(token: null);
+        final service = DocumentsService(
+          apiClient: apiClient,
+          tokenStorage: tokenStorage,
+        );
+
+        expect(
+          () => service.getSubgroupSubmissions(groupId: 10, subgroupId: 25),
+          throwsA(
+            isA<ApiException>().having((e) => e.statusCode, 'statusCode', 401),
+          ),
+        );
+      });
+
+      test(
+        'throws 403 when user is forbidden from accessing subgroup',
+        () async {
+          final mockClient = MockClient((request) async {
+            return http.Response(
+              'forbidden: not an authorized member of group',
+              403,
+            );
+          });
+
+          final apiClient = ApiClient(
+            baseUrl: 'http://localhost:8080',
+            httpClient: mockClient,
+          );
+          final tokenStorage = InMemoryTokenStorage(
+            token: 'unauthorized-token',
+          );
+          final service = DocumentsService(
+            apiClient: apiClient,
+            tokenStorage: tokenStorage,
+          );
+
+          expect(
+            () => service.getSubgroupSubmissions(groupId: 10, subgroupId: 25),
+            throwsA(
+              isA<ApiException>().having(
+                (e) => e.statusCode,
+                'statusCode',
+                403,
+              ),
+            ),
+          );
+        },
+      );
+
+      test('throws 500 when backend fails', () async {
+        final mockClient = MockClient((request) async {
+          return http.Response('internal server error', 500);
+        });
+
+        final apiClient = ApiClient(
+          baseUrl: 'http://localhost:8080',
+          httpClient: mockClient,
+        );
+        final tokenStorage = InMemoryTokenStorage(token: 'token');
+        final service = DocumentsService(
+          apiClient: apiClient,
+          tokenStorage: tokenStorage,
+        );
+
+        expect(
+          () => service.getSubgroupSubmissions(groupId: 10, subgroupId: 25),
+          throwsA(
+            isA<ApiException>().having((e) => e.statusCode, 'statusCode', 500),
+          ),
+        );
+      });
+    });
+
+    group('downloadSubgroupDocument', () {
+      test('calls GET /groups/:gid/subgroups/:sid/documents/:did/download with Bearer token', () async {
+        String? capturedPath;
+        String? capturedAuthHeader;
+
+        final fileBytes = [1, 2, 3, 4, 5];
+
+        final mockClient = MockClient((request) async {
+          capturedPath = request.url.path;
+          capturedAuthHeader = request.headers['Authorization'];
+
+          return http.Response.bytes(
+            fileBytes,
+            200,
+            headers: {
+              'content-type': 'application/pdf',
+              'content-disposition':
+                  'attachment; filename="student_submission.pdf"',
+              'content-length': '${fileBytes.length}',
+            },
+          );
+        });
+
+        final apiClient = ApiClient(
+          baseUrl: 'http://localhost:8080',
+          httpClient: mockClient,
+        );
+        final tokenStorage = InMemoryTokenStorage(token: 'faculty-jwt-token');
+        final service = DocumentsService(
+          apiClient: apiClient,
+          tokenStorage: tokenStorage,
+        );
+
+        final response = await service.downloadSubgroupDocument(
+          groupId: 10,
+          subgroupId: 25,
+          documentId: 201,
+        );
+
+        expect(capturedPath, '/groups/10/subgroups/25/documents/201/download');
+        expect(capturedAuthHeader, 'Bearer faculty-jwt-token');
+        expect(response.statusCode, 200);
+        expect(response.bodyBytes, fileBytes);
+        expect(
+          response.headers['content-disposition'],
+          'attachment; filename="student_submission.pdf"',
+        );
+      });
+
+      test('throws 401 when token is missing', () async {
+        final apiClient = ApiClient(baseUrl: 'http://localhost:8080');
+        final tokenStorage = InMemoryTokenStorage(token: null);
+        final service = DocumentsService(
+          apiClient: apiClient,
+          tokenStorage: tokenStorage,
+        );
+
+        expect(
+          () => service.downloadSubgroupDocument(
+            groupId: 10,
+            subgroupId: 25,
+            documentId: 201,
+          ),
+          throwsA(
+            isA<ApiException>().having((e) => e.statusCode, 'statusCode', 401),
+          ),
+        );
+      });
+
+      test('throws 403 when download is forbidden', () async {
+        final mockClient = MockClient((request) async {
+          return http.Response('forbidden: access denied', 403);
+        });
+
+        final apiClient = ApiClient(
+          baseUrl: 'http://localhost:8080',
+          httpClient: mockClient,
+        );
+        final tokenStorage = InMemoryTokenStorage(token: 'token');
+        final service = DocumentsService(
+          apiClient: apiClient,
+          tokenStorage: tokenStorage,
+        );
+
+        expect(
+          () => service.downloadSubgroupDocument(
+            groupId: 10,
+            subgroupId: 25,
+            documentId: 201,
+          ),
+          throwsA(
+            isA<ApiException>().having((e) => e.statusCode, 'statusCode', 403),
+          ),
+        );
+      });
+
+      test('throws 404 when document is not found', () async {
+        final mockClient = MockClient((request) async {
+          return http.Response('document not found', 404);
+        });
+
+        final apiClient = ApiClient(
+          baseUrl: 'http://localhost:8080',
+          httpClient: mockClient,
+        );
+        final tokenStorage = InMemoryTokenStorage(token: 'token');
+        final service = DocumentsService(
+          apiClient: apiClient,
+          tokenStorage: tokenStorage,
+        );
+
+        expect(
+          () => service.downloadSubgroupDocument(
+            groupId: 10,
+            subgroupId: 25,
+            documentId: 999,
+          ),
+          throwsA(
+            isA<ApiException>().having((e) => e.statusCode, 'statusCode', 404),
+          ),
+        );
+      });
+    });
   });
 }

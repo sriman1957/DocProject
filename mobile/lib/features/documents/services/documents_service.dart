@@ -1,3 +1,5 @@
+import 'package:http/http.dart' as http;
+
 import '../../../core/network/api_client.dart';
 import '../../../core/storage/token_storage.dart';
 import '../models/vault_document.dart';
@@ -88,6 +90,56 @@ class DocumentsService {
     throw const ApiException(
       statusCode: 500,
       message: 'Unexpected server response while submitting document.',
+    );
+  }
+
+  /// Fetches documents submitted to a subgroup (Faculty / College Admin only).
+  Future<List<VaultDocument>> getSubgroupSubmissions({
+    required int groupId,
+    required int subgroupId,
+  }) async {
+    final token = await tokenStorage.readAccessToken();
+    if (token == null || token.trim().isEmpty) {
+      throw const ApiException(
+        statusCode: 401,
+        message: 'Authentication required to review subgroup documents.',
+      );
+    }
+
+    final response = await apiClient.get(
+      '/groups/$groupId/subgroups/$subgroupId/documents',
+      accessToken: token,
+    );
+
+    if (response is List) {
+      return response
+          .map(
+            (item) =>
+                VaultDocument.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
+          .toList();
+    }
+
+    return const [];
+  }
+
+  /// Downloads an authorized document from a subgroup (returns raw response containing bytes & headers).
+  Future<http.Response> downloadSubgroupDocument({
+    required int groupId,
+    required int subgroupId,
+    required int documentId,
+  }) async {
+    final token = await tokenStorage.readAccessToken();
+    if (token == null || token.trim().isEmpty) {
+      throw const ApiException(
+        statusCode: 401,
+        message: 'Authentication required to download document.',
+      );
+    }
+
+    return apiClient.getBytes(
+      '/groups/$groupId/subgroups/$subgroupId/documents/$documentId/download',
+      accessToken: token,
     );
   }
 }

@@ -37,6 +37,8 @@ class User {
   final String? facultyCode;
 
   UserRole get userRole => UserRole.fromString(role);
+  bool get isStudent => userRole.isStudent;
+  bool get isFaculty => userRole.isFaculty;
 
   factory User.fromJson(Map<String, dynamic> json) {
     return User(

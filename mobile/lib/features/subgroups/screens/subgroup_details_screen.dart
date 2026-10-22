@@ -4,6 +4,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/storage/token_storage.dart';
 import '../../auth/models/user.dart';
 import '../../documents/controllers/document_upload_controller.dart';
+import '../../documents/screens/subgroup_submissions_screen.dart';
 import '../../documents/services/documents_service.dart';
 import '../../documents/widgets/file_upload_sheet.dart';
 import '../../groups/models/group.dart';
@@ -298,7 +299,7 @@ class SubgroupDetailsScreen extends StatelessWidget {
                               Text(
                                 isStudent
                                     ? 'Submit required academic certificates or files to this collection subgroup. Uploading academic certificates into this subgroup is verified against active access periods.'
-                                    : 'Configuring access periods and reviewing submitted student documents for this subgroup will be enabled in subsequent features.',
+                                    : 'Review submitted student documents and download authorized files for this collection subgroup.',
                                 style: theme.textTheme.bodySmall?.copyWith(
                                   color: colors.onPrimaryContainer,
                                   height: 1.35,
@@ -317,6 +318,28 @@ class SubgroupDetailsScreen extends StatelessWidget {
                                     size: 18,
                                   ),
                                   label: const Text('Submit Document'),
+                                ),
+                              ] else if (user.isFaculty) ...[
+                                const SizedBox(height: 12),
+                                FilledButton.icon(
+                                  key: const Key('review_submissions_button'),
+                                  onPressed: () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute<void>(
+                                        builder: (_) =>
+                                            SubgroupSubmissionsScreen(
+                                              user: user,
+                                              parentGroup: parentGroup,
+                                              subgroup: subgroup,
+                                            ),
+                                      ),
+                                    );
+                                  },
+                                  icon: const Icon(
+                                    Icons.rate_review_rounded,
+                                    size: 18,
+                                  ),
+                                  label: const Text('Review Submissions'),
                                 ),
                               ],
                             ],

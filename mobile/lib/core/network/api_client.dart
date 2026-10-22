@@ -54,6 +54,34 @@ class ApiClient {
     return _send('DELETE', path, accessToken: accessToken);
   }
 
+  Future<http.Response> getBytes(String path, {String? accessToken}) async {
+    final uri = _buildUri(path);
+    final headers = <String, String>{
+      'Accept': '*/*',
+      if (accessToken != null && accessToken.isNotEmpty)
+        'Authorization': 'Bearer $accessToken',
+    };
+
+    late final http.Response response;
+    try {
+      response = await _httpClient.get(uri, headers: headers);
+    } on ApiException {
+      rethrow;
+    } catch (e) {
+      if (e is Error) rethrow;
+      throw const ApiException(
+        statusCode: 0,
+        message: 'Unable to connect to the server. Check your connection.',
+      );
+    }
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      _handleResponse(response);
+    }
+
+    return response;
+  }
+
   Future<dynamic> _send(
     String method,
     String path, {
