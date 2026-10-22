@@ -4,6 +4,8 @@ import 'features/auth/auth_controller.dart';
 import 'features/auth/services/auth_service.dart';
 import 'features/groups/groups_controller.dart';
 import 'features/groups/services/groups_service.dart';
+import 'features/subgroups/services/subgroups_service.dart';
+import 'features/subgroups/subgroups_controller.dart';
 
 class AppDependencies {
   AppDependencies({
@@ -13,6 +15,8 @@ class AppDependencies {
     required this.authController,
     required this.groupsService,
     required this.groupsController,
+    required this.subgroupsService,
+    required this.subgroupsController,
   });
 
   final ApiClient apiClient;
@@ -21,6 +25,8 @@ class AppDependencies {
   final AuthController authController;
   final GroupsService groupsService;
   final GroupsController groupsController;
+  final SubgroupsService subgroupsService;
+  final SubgroupsController subgroupsController;
 
   static AppDependencies create({
     ApiClient? apiClient,
@@ -29,6 +35,8 @@ class AppDependencies {
     AuthController? authController,
     GroupsService? groupsService,
     GroupsController? groupsController,
+    SubgroupsService? subgroupsService,
+    SubgroupsController? subgroupsController,
   }) {
     final effectiveTokenStorage =
         tokenStorage ?? authController?.tokenStorage ?? TokenStorage();
@@ -56,6 +64,15 @@ class AppDependencies {
     final effectiveGroupsController =
         groupsController ??
         GroupsController(groupsService: effectiveGroupsService);
+    final effectiveSubgroupsService =
+        subgroupsService ??
+        SubgroupsService(
+          apiClient: effectiveApiClient,
+          tokenStorage: effectiveTokenStorage,
+        );
+    final effectiveSubgroupsController =
+        subgroupsController ??
+        SubgroupsController(subgroupsService: effectiveSubgroupsService);
 
     return AppDependencies(
       apiClient: effectiveApiClient,
@@ -64,6 +81,8 @@ class AppDependencies {
       authController: effectiveAuthController,
       groupsService: effectiveGroupsService,
       groupsController: effectiveGroupsController,
+      subgroupsService: effectiveSubgroupsService,
+      subgroupsController: effectiveSubgroupsController,
     );
   }
 
@@ -71,5 +90,6 @@ class AppDependencies {
     apiClient.close();
     authController.dispose();
     groupsController.dispose();
+    subgroupsController.dispose();
   }
 }

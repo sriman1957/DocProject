@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../auth/models/user.dart';
+import '../../subgroups/subgroups_controller.dart';
 import '../groups_controller.dart';
 import '../models/group.dart';
 import '../widgets/group_card.dart';
@@ -10,12 +11,14 @@ class GroupsListingScreen extends StatefulWidget {
   const GroupsListingScreen({
     required this.user,
     required this.groupsController,
+    this.subgroupsController,
     this.autoLoad = true,
     super.key,
   });
 
   final User user;
   final GroupsController groupsController;
+  final SubgroupsController? subgroupsController;
   final bool autoLoad;
 
   @override
@@ -34,7 +37,11 @@ class _GroupsListingScreenState extends State<GroupsListingScreen> {
   void _openGroupDetails(Group group) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => GroupDetailsScreen(group: group, user: widget.user),
+        builder: (_) => GroupDetailsScreen(
+          group: group,
+          user: widget.user,
+          subgroupsController: widget.subgroupsController,
+        ),
       ),
     );
   }

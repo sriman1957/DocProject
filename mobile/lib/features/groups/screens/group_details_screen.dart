@@ -1,17 +1,45 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/network/api_client.dart';
+import '../../../core/storage/token_storage.dart';
 import '../../auth/models/user.dart';
+import '../../subgroups/screens/subgroups_listing_screen.dart';
+import '../../subgroups/services/subgroups_service.dart';
+import '../../subgroups/subgroups_controller.dart';
 import '../models/group.dart';
 
 class GroupDetailsScreen extends StatelessWidget {
   const GroupDetailsScreen({
     required this.group,
     required this.user,
+    this.subgroupsController,
     super.key,
   });
 
   final Group group;
   final User user;
+  final SubgroupsController? subgroupsController;
+
+  void _openSubgroups(BuildContext context) {
+    final effectiveController =
+        subgroupsController ??
+        SubgroupsController(
+          subgroupsService: SubgroupsService(
+            apiClient: ApiClient(),
+            tokenStorage: TokenStorage(),
+          ),
+        );
+
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => SubgroupsListingScreen(
+          parentGroup: group,
+          user: user,
+          subgroupsController: effectiveController,
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -101,6 +129,20 @@ class GroupDetailsScreen extends StatelessWidget {
                             ),
                           ),
                         ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Action to navigate into Subgroups
+                  FilledButton.icon(
+                    onPressed: () => _openSubgroups(context),
+                    icon: const Icon(Icons.folder_copy_outlined),
+                    label: const Text('View Collection Subgroups'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
                       ),
                     ),
                   ),

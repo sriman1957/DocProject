@@ -1,8 +1,22 @@
+import 'package:docproject/core/network/api_client.dart';
+import 'package:docproject/core/storage/token_storage.dart';
 import 'package:docproject/features/auth/models/user.dart';
 import 'package:docproject/features/groups/models/group.dart';
 import 'package:docproject/features/groups/screens/group_details_screen.dart';
+import 'package:docproject/features/subgroups/models/subgroup.dart';
+import 'package:docproject/features/subgroups/screens/subgroups_listing_screen.dart';
+import 'package:docproject/features/subgroups/services/subgroups_service.dart';
+import 'package:docproject/features/subgroups/subgroups_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+class MockSubgroupsService extends SubgroupsService {
+  MockSubgroupsService()
+    : super(apiClient: ApiClient(), tokenStorage: TokenStorage());
+
+  @override
+  Future<List<Subgroup>> getSubgroups(int groupId) async => const [];
+}
 
 void main() {
   const sampleStudent = User(
@@ -133,5 +147,33 @@ void main() {
       expect(find.byType(GroupDetailsScreen), findsNothing);
       expect(find.text('Open Details'), findsOneWidget);
     });
+
+    testWidgets(
+      'tapping View Collection Subgroups opens SubgroupsListingScreen',
+      (tester) async {
+        final mockController = SubgroupsController(
+          subgroupsService: MockSubgroupsService(),
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: GroupDetailsScreen(
+              group: sampleGroup,
+              user: sampleStudent,
+              subgroupsController: mockController,
+            ),
+          ),
+        );
+
+        final button = find.text('View Collection Subgroups');
+        expect(button, findsOneWidget);
+
+        await tester.tap(button);
+        await tester.pumpAndSettle();
+
+        expect(find.byType(SubgroupsListingScreen), findsOneWidget);
+        expect(find.text('Mechanical 2024'), findsWidgets);
+      },
+    );
   });
 }

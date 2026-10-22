@@ -6,6 +6,8 @@ import '../../auth/models/user.dart';
 import '../../groups/groups_controller.dart';
 import '../../groups/screens/groups_listing_screen.dart';
 import '../../groups/services/groups_service.dart';
+import '../../subgroups/services/subgroups_service.dart';
+import '../../subgroups/subgroups_controller.dart';
 import 'faculty_dashboard_screen.dart';
 import 'student_dashboard_screen.dart';
 
@@ -14,12 +16,14 @@ class AppShell extends StatefulWidget {
     required this.user,
     required this.authController,
     this.groupsController,
+    this.subgroupsController,
     super.key,
   });
 
   final User user;
   final AuthController authController;
   final GroupsController? groupsController;
+  final SubgroupsController? subgroupsController;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -28,6 +32,7 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   int _currentIndex = 0;
   late final GroupsController _groupsController;
+  late final SubgroupsController _subgroupsController;
 
   @override
   void initState() {
@@ -36,6 +41,14 @@ class _AppShellState extends State<AppShell> {
         widget.groupsController ??
         GroupsController(
           groupsService: GroupsService(
+            apiClient: widget.authController.authService.apiClient,
+            tokenStorage: widget.authController.tokenStorage,
+          ),
+        );
+    _subgroupsController =
+        widget.subgroupsController ??
+        SubgroupsController(
+          subgroupsService: SubgroupsService(
             apiClient: widget.authController.authService.apiClient,
             tokenStorage: widget.authController.tokenStorage,
           ),
@@ -98,6 +111,7 @@ class _AppShellState extends State<AppShell> {
             GroupsListingScreen(
               user: widget.user,
               groupsController: _groupsController,
+              subgroupsController: _subgroupsController,
               autoLoad: false,
             ),
             const AppPlaceholderScreen(
@@ -115,13 +129,10 @@ class _AppShellState extends State<AppShell> {
             GroupsListingScreen(
               user: widget.user,
               groupsController: _groupsController,
+              subgroupsController: _subgroupsController,
               autoLoad: false,
             ),
-            const AppPlaceholderScreen(
-              title: 'Subgroup Activities',
-              icon: Icons.folder_copy_outlined,
-              description: 'Create certificate collection activities and configure submission deadlines.',
-            ),
+            _FacultySubgroupsHubTab(onNavigateToGroups: () => _onSelectTab(1)),
             const AppPlaceholderScreen(
               title: 'Notifications',
               icon: Icons.notifications_outlined,
@@ -217,6 +228,68 @@ class _AppShellState extends State<AppShell> {
         selectedIndex: _currentIndex,
         onDestinationSelected: _onSelectTab,
         destinations: destinations,
+      ),
+    );
+  }
+}
+
+class _FacultySubgroupsHubTab extends StatelessWidget {
+  const _FacultySubgroupsHubTab({required this.onNavigateToGroups});
+
+  final VoidCallback onNavigateToGroups;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  color: colors.secondaryContainer,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.folder_copy_rounded,
+                  size: 36,
+                  color: colors.onSecondaryContainer,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                'Collection Subgroups',
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Subgroups are organized under specific batch groups. Select any group from Groups Management to browse its collection activities and submission windows.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colors.onSurfaceVariant,
+                  height: 1.4,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: onNavigateToGroups,
+                icon: const Icon(Icons.groups_rounded),
+                label: const Text('Browse Assigned Groups'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
